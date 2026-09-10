@@ -11,12 +11,17 @@ services:
       POSTGRES_DB: payments
       POSTGRES_USER: payments
       POSTGRES_PASSWORD: payments
-      # Speeds up initdb noticeably and is irrelevant outside development.
-      POSTGRES_INITDB_ARGS: "--auth-host=trust"
     ports:
       - "5432:5432"
     volumes:
-      - payments-postgres-data:/var/lib/postgresql/data
+      # PostgreSQL 18 changed this. Earlier images took the volume at
+      # /var/lib/postgresql/data; 18+ expects it one level up at /var/lib/postgresql and
+      # places the cluster in a version-named subdirectory, so that pg_upgrade --link can
+      # work without crossing a mount boundary. Mounting the old path makes the container
+      # exit at startup with "PostgreSQL data in /var/lib/postgresql/data (unused
+      # mount/volume)" - which is easy to misread as a corrupt volume rather than a
+      # misplaced mount.
+      - payments-postgres-data:/var/lib/postgresql
     healthcheck:
       # The application waits for this, so it must test a real query rather than just the port.
       test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
