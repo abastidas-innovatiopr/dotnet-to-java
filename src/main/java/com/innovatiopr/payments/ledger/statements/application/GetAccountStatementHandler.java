@@ -1,7 +1,6 @@
 package com.innovatiopr.payments.ledger.statements.application;
 
 import com.innovatiopr.payments.accounts.AccountsApi;
-import com.innovatiopr.payments.accounts.domain.AccountError;
 import com.innovatiopr.payments.shared.application.PageResult;
 import com.innovatiopr.payments.shared.application.QueryHandler;
 import com.innovatiopr.payments.shared.domain.Result;
@@ -23,8 +22,9 @@ public class GetAccountStatementHandler
     @Override
     @Transactional(readOnly = true)
     public Result<PageResult<StatementLine>> handle(GetAccountStatementQuery query) {
-        if (!accounts.exists(query.accountId())) {
-            return Result.failure(AccountError.notFound(query.accountId()));
+        Result<Void> accountExists = accounts.requireExists(query.accountId());
+        if (accountExists.isFailure()) {
+            return accountExists.propagate();
         }
         return Result.success(statements.findForAccount(query.accountId(), query.from(), query.to(), query.page()));
     }

@@ -5,7 +5,6 @@ import com.innovatiopr.payments.accounts.application.AccountRepository;
 import com.innovatiopr.payments.accounts.domain.Account;
 import com.innovatiopr.payments.accounts.domain.AccountNumber;
 import com.innovatiopr.payments.customers.CustomersApi;
-import com.innovatiopr.payments.customers.domain.CustomerError;
 import com.innovatiopr.payments.shared.application.CommandHandler;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.MoneyError;
@@ -42,8 +41,12 @@ public class OpenAccountHandler implements CommandHandler<OpenAccountCommand, Op
 
     @Override
     public Result<OpenAccountResult> handle(OpenAccountCommand command) {
-        if (!customers.exists(command.customerId())) {
-            return Result.failure(CustomerError.notFound(command.customerId()));
+        // Asked as a question, not answered here: Customers owns what "no such customer" means, and
+        // returns its own error inside the Result. This handler never names CustomerError, so the
+        // Accounts module does not reach into the Customers module's internals.
+        Result<Void> customerExists = customers.requireExists(command.customerId());
+        if (customerExists.isFailure()) {
+            return customerExists.propagate();
         }
 
         Currency currency;

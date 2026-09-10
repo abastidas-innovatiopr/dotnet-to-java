@@ -1,7 +1,6 @@
 package com.innovatiopr.payments.payments.transactions.application;
 
 import com.innovatiopr.payments.accounts.AccountsApi;
-import com.innovatiopr.payments.accounts.domain.AccountError;
 import com.innovatiopr.payments.shared.application.PageResult;
 import com.innovatiopr.payments.shared.application.QueryHandler;
 import com.innovatiopr.payments.shared.domain.Result;
@@ -29,8 +28,9 @@ public class GetAccountTransactionsHandler
     @Override
     @Transactional(readOnly = true)
     public Result<PageResult<TransactionDetails>> handle(TransactionQueries.GetAccountTransactionsQuery query) {
-        if (!accounts.exists(query.accountId())) {
-            return Result.failure(AccountError.notFound(query.accountId()));
+        Result<Void> accountExists = accounts.requireExists(query.accountId());
+        if (accountExists.isFailure()) {
+            return accountExists.propagate();
         }
         return Result.success(transactions.findByAccount(query.accountId(), query.filter(), query.page()));
     }

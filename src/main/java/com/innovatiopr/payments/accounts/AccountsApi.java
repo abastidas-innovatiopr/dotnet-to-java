@@ -19,6 +19,17 @@ public interface AccountsApi {
     boolean exists(AccountId accountId);
 
     /**
+     * Succeeds when the account exists, and otherwise fails with this module's own "not found" error.
+     *
+     * <p>Callers therefore never import {@code AccountError}: they ask the question and propagate the
+     * answer. Deciding what counts as an account problem stays with the module that owns accounts.
+     */
+    Result<Void> requireExists(AccountId accountId);
+
+    /** Opens a new, empty account. Funding it is a separate deposit — see {@code Account.open}. */
+    Result<AccountId> open(com.innovatiopr.payments.customers.CustomerId customerId, String currencyCode);
+
+    /**
      * Moves money between two accounts, taking row locks in a deterministic order.
      * Enforces every {@code Account} invariant on both legs.
      */

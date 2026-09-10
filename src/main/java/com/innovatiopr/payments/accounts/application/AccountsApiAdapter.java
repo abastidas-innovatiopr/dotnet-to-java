@@ -6,6 +6,7 @@ import com.innovatiopr.payments.accounts.AccountsApi;
 import com.innovatiopr.payments.accounts.TransferPostings;
 import com.innovatiopr.payments.accounts.domain.Account;
 import com.innovatiopr.payments.accounts.domain.AccountError;
+import com.innovatiopr.payments.accounts.opening.application.OpenAccountCommand;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.Money;
 import com.innovatiopr.payments.shared.domain.Result;
@@ -47,17 +48,35 @@ class AccountsApiAdapter implements AccountsApi {
     private final AccountRepository accounts;
     private final DomainEventPublisher events;
     private final Clock clock;
+    private final com.innovatiopr.payments.accounts.opening.application.OpenAccountHandler openAccount;
 
-    AccountsApiAdapter(AccountRepository accounts, DomainEventPublisher events, Clock clock) {
+    AccountsApiAdapter(AccountRepository accounts, DomainEventPublisher events, Clock clock,
+                       com.innovatiopr.payments.accounts.opening.application.OpenAccountHandler openAccount) {
         this.accounts = accounts;
         this.events = events;
         this.clock = clock;
+        this.openAccount = openAccount;
     }
 
     @Override
     @Transactional(readOnly = true)
     public boolean exists(AccountId accountId) {
         return accounts.existsById(accountId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Result<Void> requireExists(AccountId accountId) {
+        return accounts.existsById(accountId)
+                ? Result.ok()
+                : Result.failure(AccountError.notFound(accountId));
+    }
+
+    @Override
+    public Result<AccountId> open(com.innovatiopr.payments.customers.CustomerId customerId,
+                                  String currencyCode) {
+        return openAccount.handle(new OpenAccountCommand(customerId, currencyCode))
+                .map(opened -> AccountId.of(opened.accountId()));
     }
 
     @Override
