@@ -12,18 +12,21 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * OpenAPI metadata.
+ * API-level OpenAPI metadata: title, version, and the description Scalar renders as its introduction.
  *
- * <h2>A caveat about functional endpoints</h2>
- * springdoc discovers annotated controllers by reflection. A {@code RouterFunction} is an opaque object
- * built at runtime, so springdoc cannot see the routes registered here and the generated document lists
- * no paths by default. This is the third real cost of functional routing, after losing
- * {@code linkTo(methodOn(...))} and automatic {@code @Valid}.
+ * <h2>Per-route documentation lives with the routes</h2>
+ * springdoc discovers annotated controllers by reflection, and a {@code RouterFunction} is an opaque
+ * object built at runtime — so by default the generated document contains <em>no paths at all</em> and a
+ * documentation UI renders a blank page while everything appears to work. That is the third real cost of
+ * functional routing, after losing {@code linkTo(methodOn(...))} and automatic {@code @Valid}.
  *
- * <p>The fix is {@code @RouterOperation}/{@code @RouterOperations} from springdoc, or a hand-written
- * document. This class supplies the API-level metadata and the reusable components — the
- * {@code Idempotency-Key} header, the Problem Details schema, the pagination parameters — that route
- * documentation refers to, and {@code docs/API.md} carries the full endpoint reference.
+ * <p>Each route therefore declares its own operation through springdoc's {@code SpringdocRouteBuilder}
+ * (see {@code TransferRoutes}), which keeps the documentation in the same call as the route so the two
+ * cannot drift. Fragments shared across slices — the {@code Idempotency-Key} header, the pagination
+ * parameters, the HAL and Problem Details responses — live in {@link OpenApiDocs}.
+ *
+ * <p>{@code OpenApiDocumentIT} asserts that every route reaches the document, so adding one with plain
+ * {@code RouterFunctions.route()} fails the build rather than silently shrinking the API reference.
  */
 @Configuration(proxyBeanMethods = false)
 class OpenApiConfiguration {

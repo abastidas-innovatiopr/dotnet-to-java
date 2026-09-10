@@ -11,7 +11,7 @@ Java 25 (LTS) · Spring Boot 4.1.1 · Spring Framework 7 · Hibernate 7.4 · Pos
 Spring Modulith 2.1 · Spring HATEOAS 3.1 · Flyway 12 · JUnit 6 · Testcontainers 2
 ```
 
-**176 tests**: 121 unit (no Spring), 55 integration (real PostgreSQL).
+**183 tests**: 121 unit (no Spring), 62 integration (real PostgreSQL).
 
 ---
 
@@ -23,6 +23,27 @@ docker compose up -d                                        # PostgreSQL only
 ```
 
 Then open **<http://localhost:8080/docs>** — the Scalar API reference, served offline from the jar.
+
+![Scalar API reference](docs/images/scalar-overview.png)
+
+<details>
+<summary>More of the API reference</summary>
+
+**The transfer endpoint** — the `Idempotency-Key` header, the request schema with its validation
+constraints, and all six status codes it can return:
+
+![Transfer endpoint](docs/images/scalar-transfer.png)
+
+**State-driven hypermedia** — the account endpoint documents which links appear in which state, because a
+client should look for a link rather than encode the bank's rules:
+
+![Account endpoint](docs/images/scalar-account-links.png)
+
+**Pagination, sorting and filters** on transaction history (dark theme):
+
+![Transaction history](docs/images/scalar-transactions-dark.png)
+
+</details>
 
 ```bash
 ./mvnw test                 # unit + architecture tests, no Docker needed
@@ -147,11 +168,30 @@ RouterFunction<ServerResponse> transferRouterFunction(TransferEndpoint endpoint)
 **What it costs.** Three things stop working, and they are rarely mentioned:
 
 1. **`linkTo(methodOn(...))` is unavailable** — it reflects over an annotated controller method. Replaced
-   by an `ApiPaths` constants class.
-2. **`@Valid` does nothing** — Bean Validation is run by the annotated-controller argument resolvers.
-   `RequestValidator` invokes it explicitly.
-3. **springdoc cannot see the routes** — it discovers controllers by reflection, and a `RouterFunction`
-   is an opaque runtime object.
+   by an `ApiPaths` constants class. Arguably safer: a renamed path breaks compilation instead of
+   silently emitting a wrong link.
+2. **`@Valid` does nothing** — Bean Validation is run by the annotated-controller argument resolvers, so
+   nothing inspects the annotations. `RequestValidator` invokes it explicitly.
+3. **springdoc generates no paths** — it discovers controllers by reflection, and a `RouterFunction` is an
+   opaque runtime object. This one is a *silent* failure: the app runs, `/docs` returns 200, and the API
+   reference is simply blank. The fix is `SpringdocRouteBuilder`, a drop-in replacement that takes an
+   operation builder per route:
+
+   ```java
+   SpringdocRouteBuilder.route()
+           .POST(ApiPaths.TRANSFERS, endpoint::transfer, ops -> ops
+                   .operationId("transferMoney")
+                   .summary("Transfer money between two accounts")
+                   .parameter(OpenApiDocs.idempotencyKeyHeader())
+                   .requestBody(requestBodyBuilder().implementation(TransferRequest.class))
+                   .response(OpenApiDocs.hal("201", "Transfer completed."))
+                   .response(OpenApiDocs.problem("422", "A domain rule refused the transfer.")))
+           .build();
+   ```
+
+   Documentation lives in the same call as the route, so the two cannot drift — delete a route and its
+   docs go with it. `OpenApiDocumentIT` then asserts that all 16 operations are present, so a route added
+   with the wrong builder fails the build instead of quietly shrinking the docs.
 
 All three are solvable, and all three are real. Choose functional routing because you want explicit
 routing tables, not because you expect it to be free.
@@ -239,7 +279,7 @@ every site that must handle it.
 
 ## Where this design pushed back on the brief
 
-Seven decisions differ from the specification. Each was forced by the compiler, the framework, or a
+Eight decisions differ from the specification. Each was forced by the compiler, the framework, or a
 correctness bug found while running the thing.
 
 ### 1. `sealed interface DomainError` does not compile
@@ -281,7 +321,14 @@ close a cycle with the existing `payments → accounts`. The URL still reads
 Importing `TransactionId` from Payments would create a cycle. The Ledger names the concept on its own
 terms and Payments translates at the boundary.
 
-### 5. The Scalar starter does not work on Spring Boot 4
+### 5. Functional routes documented themselves as nothing
+
+The first OpenAPI document had **zero paths**, so Scalar rendered an empty reference — and nothing
+failed. Fixed with `SpringdocRouteBuilder` across all ten route classes, and locked down by
+`OpenApiDocumentIT`, which asserts every operation, its `operationId`, summary, tag, responses and
+request schema.
+
+### 6. The Scalar starter does not work on Spring Boot 4
 
 `com.scalar.maven:scalar-webmvc` is built against Boot 3.5, and its autoconfiguration entry is annotated
 `@Configuration` rather than `@AutoConfiguration`. Boot 4 requires the latter, so it is **never
@@ -291,13 +338,13 @@ correct in the POM and silently produced no docs UI.
 **Resolution:** depend on `scalar-core` only and mount the UI through a `RouterFunction`. Its ~3.7 MB
 bundle is served from the jar, so the docs work with no network at all.
 
-### 6. Two levels of domain event, deliberately
+### 7. Two levels of domain event, deliberately
 
 Aggregate-local facts (`MoneyDebited`) and business-process facts (`TransferCompleted`) both exist. Only
 the fine-grained set forces consumers to re-assemble operations; only the coarse set hides deposits and
 withdrawals.
 
-### 7. `@Transactional` is not on the transfer handler
+### 8. `@Transactional` is not on the transfer handler
 
 It is on a separate bean it calls. A duplicate-key violation leaves the PostgreSQL transaction aborted,
 so the retry lookup must happen after that transaction unwinds — which is only possible if the boundary
@@ -328,8 +375,8 @@ Boot 4 is a bigger break than the version number suggests. Every item here cost 
 | Domain — aggregates, `Money`, `Result` | JUnit 6, AssertJ | No | 64 |
 | Application — handlers, pagination, sort allow-list | + Mockito | No | 31 |
 | Architecture — layering, modules | ArchUnit, Spring Modulith | No | 26 |
-| Integration — the whole stack | Testcontainers PostgreSQL | Yes | 55 |
-| **Total** | | | **176** |
+| Integration — the whole stack | Testcontainers PostgreSQL | Yes | 62 |
+| **Total** | | | **183** |
 
 **Domain tests run without Spring** — no context, no database, milliseconds. That is the practical payoff
 of keeping the model framework-free, and it is why there can be a lot of them.

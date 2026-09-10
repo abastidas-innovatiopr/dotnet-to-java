@@ -378,9 +378,12 @@ Choosing `RouterFunction` over `@RestController` is not free, and the trade is r
    than silently emitting a wrong link.
 2. **`@Valid` does nothing.** Bean Validation is run by the annotated-controller argument resolvers.
    `RequestValidator` invokes it explicitly.
-3. **springdoc cannot see the routes.** It discovers annotated controllers by reflection; a
-   `RouterFunction` is an opaque runtime object. Metadata is supplied by `OpenApiConfiguration` and the
-   endpoint reference lives in `docs/API.md`.
+3. **springdoc generates no paths by default.** It discovers annotated controllers by reflection; a
+   `RouterFunction` is an opaque runtime object, so the document came out empty and Scalar rendered a
+   blank page without anything failing. Solved with springdoc's `SpringdocRouteBuilder`, which takes an
+   operation builder alongside each route — documentation and route are declared together and cannot
+   drift. `OpenApiDocumentIT` asserts all 16 operations, their ids, summaries, tags, responses and
+   request schemas.
 
 ---
 
