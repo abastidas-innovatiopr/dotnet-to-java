@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.innovatiopr</groupId>
+    <artifactId>payments-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>payments-api</artifactId>
+  <name>payments-api</name>
+  <description>Functional HTTP routes, handler functions, HATEOAS resources and Problem Details mapping.</description>
+
+  <!--
+    ============================================================================
+    The HTTP adapter: RouterFunctions, handler functions, hypermedia resources and
+    the single place where a DomainError becomes a status code.
+
+    Depends on the application layer only. No Hibernate and no JDBC on the compile
+    classpath, so an endpoint cannot query the database however tempting the
+    shortcut - it has to go through a handler.
+    ============================================================================
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>com.innovatiopr</groupId>
+      <artifactId>payments-application</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-hateoas</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+      <version>${springdoc.version}</version>
+    </dependency>
+    <!--
+      scalar-core only, for its bundled scalar.js so the docs UI works offline.
+      com.scalar.maven:scalar-webmvc is deliberately NOT used: it is built against
+      Spring Boot 3.5 and its autoconfiguration entry is annotated @Configuration
+      rather than @AutoConfiguration, so Spring Boot 4 never evaluates it and /scalar
+      returns 404. We mount the UI ourselves through a RouterFunction.
+    -->
+    <dependency>
+      <groupId>com.scalar.maven</groupId>
+      <artifactId>scalar-core</artifactId>
+      <version>${scalar.version}</version>
+    </dependency>
+  </dependencies>
+</project>

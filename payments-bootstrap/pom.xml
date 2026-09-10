@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.innovatiopr</groupId>
+    <artifactId>payments-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>payments-bootstrap</artifactId>
+  <name>payments-bootstrap</name>
+  <description>The composition root: @SpringBootApplication, configuration, and the whole-application tests.</description>
+
+  <!--
+    ============================================================================
+    The composition root - the only module allowed to know about every other one.
+
+    Somewhere something has to wire the adapters to the ports, and concentrating
+    that in one module keeps every other module ignorant of the assembly. This is
+    also the only module that produces an executable jar; the rest are libraries.
+
+    It owns the whole-application tests, because they are the only ones that need
+    the full classpath:
+      * ArchitectureTest      - ArchUnit rules a POM cannot express
+      * ModularityTest        - Spring Modulith bounded-context verification
+      * *IT                   - Testcontainers integration tests
+
+        ./mvnw spring-boot:run -pl payments-bootstrap -Dspring-boot.run.profiles=local
+    ============================================================================
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>com.innovatiopr</groupId>
+      <artifactId>payments-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.innovatiopr</groupId>
+      <artifactId>payments-infrastructure</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+
+    <!-- Module verification and documentation generation. -->
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-starter-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-actuator</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- Observability -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-opentelemetry</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- ============================ Test ============================ -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-docs</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <version>${archunit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        Declared, not just configured. The parent's <pluginManagement> supplies the
+        includes and the goal bindings, but pluginManagement alone does not add a
+        plugin to the build - and failsafe has no default lifecycle binding, unlike
+        surefire. Leaving it out made `mvn verify` report BUILD SUCCESS while running
+        zero integration tests: a green build that proved nothing.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+      </plugin>
+
+      <!-- Only this module produces a runnable jar. -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <!-- Overrides the parent's <skip>true</skip>: this is the one runnable module. -->
+          <skip>false</skip>
+          <mainClass>com.innovatiopr.payments.PaymentsApplication</mainClass>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

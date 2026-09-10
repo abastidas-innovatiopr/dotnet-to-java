@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.innovatiopr</groupId>
+    <artifactId>payments-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>payments-infrastructure</artifactId>
+  <name>payments-infrastructure</name>
+  <description>Hibernate repositories, JPA entities and mappers, JdbcClient read models, Flyway schema.</description>
+
+  <!--
+    ============================================================================
+    Adapters that implement the application's ports, plus the Flyway migrations.
+
+    This is the only module that may see Hibernate, JDBC or the PostgreSQL driver -
+    and it is where they are confined by the build, not by convention.
+
+    It does NOT depend on payments-api, and payments-api does not depend on it.
+    Neither appears in the other's POM, so a repository cannot import a resource
+    assembler and an endpoint cannot import a JPA entity: both are build failures
+    rather than review comments.
+    ============================================================================
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>com.innovatiopr</groupId>
+      <artifactId>payments-application</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- Persistent event publication registry: the transactional outbox. -->
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-starter-jdbc</artifactId>
+    </dependency>
+  </dependencies>
+</project>

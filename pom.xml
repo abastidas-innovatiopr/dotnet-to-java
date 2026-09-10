@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.innovatiopr</groupId>
+  <artifactId>payments-parent</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>payments-parent</name>
+  <description>Payments API: DDD + Clean Architecture + Vertical Slices + CQRS + Modular Monolith</description>
+
+  <!--
+    ============================================================================
+    One Maven module per Clean Architecture layer.
+
+    This is the .NET equivalent of separate .csproj projects, and it exists for one
+    reason: it makes the dependency rule a COMPILE-TIME guarantee rather than a test.
+
+    payments-domain's POM has no Spring on it at all, so `import
+    org.springframework.…` in an aggregate does not "fail a rule" - it fails to
+    resolve. The compiler enforces the architecture; ArchUnit then covers the finer
+    rules a POM cannot express (no JPA entities outside infrastructure, no
+    @Transactional on endpoints, and so on).
+
+    Dependencies point inward, and Maven refuses anything else:
+
+        payments-bootstrap  ──►  api, infrastructure, application, domain
+        payments-api        ──►  application ──► domain
+        payments-infrastructure ──► application ──► domain
+        payments-domain     ──►  (nothing)
+
+    api and infrastructure cannot see each other. Neither is listed in the other's
+    POM, so an accidental import is a build failure.
+    ============================================================================
+  -->
+  <modules>
+    <module>payments-domain</module>
+    <module>payments-application</module>
+    <module>payments-infrastructure</module>
+    <module>payments-api</module>
+    <module>payments-bootstrap</module>
+  </modules>
+
+  <properties>
+    <java.version>25</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <spring-modulith.version>2.1.1</spring-modulith.version>
+    <springdoc.version>3.1.1</springdoc.version>
+    <scalar.version>0.6.67</scalar.version>
+    <archunit.version>1.5.0</archunit.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.modulith</groupId>
+        <artifactId>spring-modulith-bom</artifactId>
+        <version>${spring-modulith.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- The layer modules, so children declare them without repeating a version. -->
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-domain</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-application</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-infrastructure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-api</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- Every module gets the same unit-test toolchain. -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <!--
+          Skipped by default so that `./mvnw -am -pl payments-bootstrap spring-boot:run`
+          works as one command. With -am the reactor also contains the parent and the four
+          library modules, and without this the plugin would try to run each of them and
+          fail on "Unable to find a suitable main class". payments-bootstrap sets
+          <skip>false</skip> and is the only module that runs or repackages.
+        -->
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <configuration>
+            <skip>true</skip>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <configuration>
+            <!-- Fast tests everywhere; *IT needs Docker and runs under failsafe. -->
+            <excludes>
+              <exclude>**/*IT.java</exclude>
+            </excludes>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <configuration>
+            <includes>
+              <include>**/*IT.java</include>
+            </includes>
+          </configuration>
+          <executions>
+            <execution>
+              <goals>
+                <goal>integration-test</goal>
+                <goal>verify</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>
