@@ -37,8 +37,7 @@ public final class AccountEvents {
     }
 
     public record AccountOpened(UUID eventId, Instant occurredAt, String aggregateId, String customerId,
-                                String accountNumber, String currency, BigDecimal initialBalance)
-            implements DomainEvent { }
+                                String accountNumber, String currency) implements DomainEvent { }
 
     public record MoneyDeposited(UUID eventId, Instant occurredAt, String aggregateId, BigDecimal amount,
                                  String currency, BigDecimal resultingBalance) implements DomainEvent { }
@@ -58,9 +57,10 @@ public final class AccountEvents {
 
     public record AccountClosed(UUID eventId, Instant occurredAt, String aggregateId) implements DomainEvent { }
 
-    static AccountOpened opened(AccountId id, String customerId, AccountNumber number, Money balance, Instant at) {
+    static AccountOpened opened(AccountId id, String customerId, AccountNumber number,
+                                java.util.Currency currency, Instant at) {
         return new AccountOpened(UUID.randomUUID(), at, id.toString(), customerId, number.value(),
-                balance.currency().getCurrencyCode(), balance.amount());
+                currency.getCurrencyCode());
     }
 
     static MoneyDeposited deposited(AccountId id, Money amount, Money balance, Instant at) {

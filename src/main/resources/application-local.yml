@@ -1,0 +1,22 @@
+# Developer machine. Pairs with docker-compose.yml.
+#
+#   docker compose up -d
+#   ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/payments
+    username: payments
+    password: payments
+
+  jpa:
+    properties:
+      hibernate:
+        format_sql: true
+
+logging:
+  level:
+    com.innovatiopr.payments: DEBUG
+    # Uncomment to see the SQL Hibernate and JdbcClient actually issue:
+    # org.hibernate.SQL: DEBUG
+    # org.hibernate.orm.jdbc.bind: TRACE

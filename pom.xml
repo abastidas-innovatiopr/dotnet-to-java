@@ -85,6 +85,12 @@
       <groupId>org.springframework.modulith</groupId>
       <artifactId>spring-modulith-starter-jdbc</artifactId>
     </dependency>
+    <!-- Exposes /actuator/modulith: the live module structure and dependency graph. -->
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-actuator</artifactId>
+      <scope>runtime</scope>
+    </dependency>
 
     <!-- ============ Observability ============ -->
     <dependency>

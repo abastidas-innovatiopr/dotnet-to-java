@@ -8,13 +8,11 @@ import com.innovatiopr.payments.customers.CustomersApi;
 import com.innovatiopr.payments.customers.domain.CustomerError;
 import com.innovatiopr.payments.shared.application.CommandHandler;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
-import com.innovatiopr.payments.shared.domain.Money;
 import com.innovatiopr.payments.shared.domain.MoneyError;
 import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.Currency;
 
@@ -55,12 +53,9 @@ public class OpenAccountHandler implements CommandHandler<OpenAccountCommand, Op
             return Result.failure(new MoneyError.UnknownCurrency(String.valueOf(command.currencyCode())));
         }
 
-        BigDecimal initial = command.initialDeposit() == null ? BigDecimal.ZERO : command.initialDeposit();
-        Money initialDeposit = Money.of(initial, currency);
-
         AccountNumber accountNumber = generateUnusedAccountNumber();
         Result<Account> opened = Account.open(AccountId.generate(), command.customerId(), accountNumber,
-                currency, initialDeposit, clock.instant());
+                currency, clock.instant());
         if (opened.isFailure()) {
             return opened.propagate();
         }

@@ -64,23 +64,29 @@ public final class Account extends AggregateRoot<AccountId> {
         this.version = version;
     }
 
-    /** Opens a new account, optionally funded with an initial deposit. */
+    /**
+     * Opens a new account with a zero balance.
+     *
+     * <h2>Why there is no initial-deposit parameter</h2>
+     * An earlier version of this method accepted an opening balance. It produced an account whose balance
+     * no ledger posting explained: the money appeared by fiat, so the sum of an account's ledger entries
+     * no longer equalled its balance and a statement could not be reconciled against it. For a system
+     * whose entire purpose is an auditable ledger, that is a defect rather than a convenience.
+     *
+     * <p>The fix is to separate two genuinely different events. Opening an account is an Accounts concern
+     * and yields an empty account. Funding it is a financial operation — a deposit — owned by the Payments
+     * module, which writes the balanced ledger postings and the payment transaction alongside the balance
+     * change. Real institutions treat account opening and initial funding as distinct events for exactly
+     * this reason.
+     *
+     * <p>It also keeps the module graph acyclic: posting to the ledger from here would require
+     * {@code accounts → ledger}, and Ledger already depends on Accounts for {@code AccountId}.
+     */
     public static Result<Account> open(AccountId id, CustomerId customerId, AccountNumber accountNumber,
-                                       Currency currency, Money initialDeposit, Instant now) {
-        Objects.requireNonNull(initialDeposit, "initialDeposit");
-        if (!initialDeposit.currency().equals(currency)) {
-            return Result.failure(MoneyError.currencyMismatch(currency, initialDeposit.currency()));
-        }
-        if (initialDeposit.isNegative()) {
-            return Result.failure(MoneyError.amountMustBePositive());
-        }
-
-        Account account = new Account(id, customerId, accountNumber, currency, initialDeposit,
+                                       Currency currency, Instant now) {
+        Account account = new Account(id, customerId, accountNumber, currency, Money.zero(currency),
                 AccountStatus.ACTIVE, now, 0L);
-        account.raise(AccountEvents.opened(id, customerId.toString(), accountNumber, initialDeposit, now));
-        if (initialDeposit.isPositive()) {
-            account.raise(AccountEvents.deposited(id, initialDeposit, initialDeposit, now));
-        }
+        account.raise(AccountEvents.opened(id, customerId.toString(), accountNumber, currency, now));
         return Result.success(account);
     }
 
