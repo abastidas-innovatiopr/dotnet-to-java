@@ -99,6 +99,26 @@ management:
     sampling:
       # Sample everything in development. Lower it in production, where trace volume costs money.
       probability: ${TRACING_SAMPLE_RATE:1.0}
+
+  # OTLP export is OFF unless an endpoint is configured.
+  #
+  # Micrometer's OTLP registry defaults to http://localhost:4318 and starts publishing immediately, so
+  # with no collector running it retries on a schedule and fills the log with connection stack traces -
+  # noise that buries real problems and slows the test suite down. Instrumentation stays on either way
+  # (Micrometer collects, /actuator/prometheus serves, traceId/spanId reach the MDC); only the push
+  # exporter is disabled. Set OTLP_ENDPOINT and flip these to true to ship to a collector.
+  otlp:
+    metrics:
+      export:
+        enabled: ${OTLP_METRICS_ENABLED:false}
+        url: ${OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+    tracing:
+      export:
+        enabled: ${OTLP_TRACING_ENABLED:false}
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        enabled: ${OTLP_LOGGING_ENABLED:false}
   observations:
     key-values:
       application: ${spring.application.name}

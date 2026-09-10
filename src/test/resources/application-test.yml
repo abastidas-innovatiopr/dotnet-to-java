@@ -18,6 +18,18 @@ spring:
         schema-initialization:
           enabled: false
 
+management:
+  otlp:
+    metrics:
+      export:
+        enabled: false
+    tracing:
+      export:
+        enabled: false
+    logging:
+      export:
+        enabled: false
+
 logging:
   level:
     root: WARN
