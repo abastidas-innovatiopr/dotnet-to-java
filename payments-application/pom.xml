@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.innovatiopr</groupId>
+    <artifactId>payments-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>payments-application</artifactId>
+  <name>payments-application</name>
+  <description>Use cases, CQRS handlers, repository and read-model ports, transaction boundaries.</description>
+
+  <!--
+    ============================================================================
+    Use cases and the ports they need. Depends on the domain and on almost nothing
+    else.
+
+    Note what is absent: no Hibernate, no JdbcClient, no PostgreSQL driver, no web
+    stack. A handler physically cannot reach for an EntityManager - it can only talk
+    to the interfaces declared here, which infrastructure implements. That is
+    dependency inversion enforced by the build rather than by review.
+
+    Spring is present, but only the two pieces this layer legitimately uses:
+      * spring-context - @Service, so handlers are managed beans;
+      * spring-tx      - @Transactional, because the transaction boundary belongs
+                         to the use case and nowhere else.
+
+    A stricter reading of Clean Architecture keeps even these out and configures
+    beans from the outside. That is defensible, and it was rejected here: it costs
+    an XML- or Java-config indirection for every handler and buys purity this
+    project does not need. The line drawn instead is that the application layer may
+    know it lives in a container, but not which database or transport it runs on.
+    ============================================================================
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>com.innovatiopr</groupId>
+      <artifactId>payments-domain</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-tx</artifactId>
+    </dependency>
+
+    <!--
+      A logging facade, not a logging framework: slf4j-api is an interface set with no
+      implementation behind it here. Which backend answers the calls is decided by
+      payments-bootstrap, which supplies Logback.
+    -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+
+    <!--
+      @ApplicationModuleListener, for policies that react to a domain event after the
+      publishing transaction commits. Reacting to a domain fact is an application
+      concern; the transport a notification eventually travels over would be a port
+      implemented in infrastructure.
+    -->
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-events-api</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

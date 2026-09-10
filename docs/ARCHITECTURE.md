@@ -1,8 +1,15 @@
 # Architecture
 
-The design, stated before the code and kept in step with it. Everything here is enforced by
-`ArchitectureTest` (22 ArchUnit rules) and `ModularityTest` (Spring Modulith), so a claim that stops
-being true fails the build.
+The design, stated before the code and kept in step with it. Every claim here is enforced by the build,
+so one that stops being true fails it:
+
+| Mechanism | Enforces |
+|---|---|
+| **Maven modules** (5, one per layer) | The dependency rule, at compile time — the domain cannot import a framework that is not on its classpath |
+| **`LayerModuleIsolationTest`** (7 tests) | That the POMs stay isolated and do not drift |
+| **`ArchitectureTest`** (22 ArchUnit rules) | What a POM cannot express: no JPA entity outside infrastructure, no `@Transactional` on a route, no Spring Data `Page` in a use case |
+| **`ModularityTest`** (Spring Modulith) | Bounded-context boundaries and the absence of cycles |
+| **`OpenApiDocumentIT`** (7 tests) | That every functional route reaches the OpenAPI document |
 
 ---
 
@@ -273,7 +280,9 @@ public interface AccountRepository {
 }
 ```
 
-No port mentions `JpaRepository`, `EntityManager`, `Page`, `Pageable` or `Sort`. ArchUnit enforces it.
+No port mentions `JpaRepository`, `EntityManager`, `Page`, `Pageable` or `Sort` — and in the
+multi-module build it could not: `payments-application` has neither Hibernate nor Spring Data on its
+compile classpath. ArchUnit keeps the rule stated explicitly as well, for the cases a POM cannot cover.
 
 **There is no generic domain repository.** A `Repository<T, ID>` forces meaningless CRUD onto aggregates
 that should not have it (nothing deletes an `Account`) and leaves nowhere to express what matters —
@@ -281,8 +290,9 @@ that should not have it (nothing deletes an `Account`) and leaves nowhere to exp
 
 **There *is* a generic Hibernate repository, in infrastructure only.**
 `GenericHibernateRepository<E, ID>` removes `EntityManager` boilerplate. Note the type parameter: `E` is
-the **JPA entity**, never the aggregate. ArchUnit fails the build if the domain or application layer
-references it.
+the **JPA entity**, never the aggregate. It lives in `payments-infrastructure`, which the domain and
+application modules do not depend on — so referencing it from a use case is a compile error, and
+ArchUnit states the rule as well.
 
 ### Read side
 
@@ -291,58 +301,76 @@ Separate ports, separate implementations, `JdbcClient`: `CustomerReadModel`, `Ac
 
 ---
 
-## 9. Package structure
+## 9. Module and package structure
+
+### Maven modules — the layers
 
 ```
-com.innovatiopr.payments
-├── PaymentsApplication.java
-├── DevelopmentDataSeeder.java          composition root, @Profile("local")
-│
-├── shared/                             OPEN module — the kernel
-│   ├── domain/                         Money, Result, DomainError, DomainEvent, AggregateRoot
-│   ├── application/                    Command, Query, handlers, PageRequest/PageResult, ports
-│   ├── infrastructure/                 GenericHibernateRepository, event publisher, SortColumns
-│   └── api/                            ProblemDetails, ApiPaths, PagedResources, validation, docs
-│
-├── customers/
-│   ├── CustomerId · CustomersApi       ← published API
-│   ├── domain/                         Customer, EmailAddress, PersonName, CustomerError
-│   ├── application/                    CustomerRepository, CustomersApiAdapter
-│   ├── infrastructure/                 JPA entity, mapper, Hibernate repo, JdbcClient read model
-│   ├── registration/{api,application}  ← vertical slice
-│   └── directory/{api,application}     ← vertical slice
-│
-├── accounts/
-│   ├── AccountId · AccountsApi · AccountPosting · TransferPostings
-│   ├── domain/                         Account, AccountNumber, AccountStatus, AccountError, events
-│   ├── application/                    AccountRepository, AccountsApiAdapter
-│   ├── infrastructure/
-│   ├── opening/{api,application}
-│   ├── details/{api,application}
-│   └── status/{api,application}
-│
-├── ledger/
-│   ├── LedgerTransactionId · PostingReference · LedgerApi
-│   ├── domain/                         LedgerTransaction, LedgerEntry, LedgerAccountRef, LedgerError
-│   ├── application/                    LedgerRepository, LedgerApiAdapter
-│   ├── infrastructure/
-│   └── statements/{api,application}
-│
-└── payments/
-    ├── PaymentsApi
-    ├── domain/                         PaymentTransaction, IdempotencyKey, TransactionReference, errors
-    ├── application/                    ports, PaymentsApiAdapter
-    ├── infrastructure/
-    ├── transfer/{api,application}
-    ├── deposits/{api,application}
-    ├── withdrawals/{api,application}
-    └── transactions/{api,application}
+payments-parent  (pom, aggregator + dependencyManagement)
+├── payments-domain           ← classpath: jspecify + spring-modulith-api (provided). Nothing else.
+├── payments-application      ← + domain, spring-context, spring-tx, slf4j-api
+├── payments-infrastructure   ← + application, data-jpa, jdbc, flyway, postgresql, modulith-jdbc
+├── payments-api              ← + application, webmvc, hateoas, validation, springdoc, scalar-core
+└── payments-bootstrap        ← + api, infrastructure, actuator, opentelemetry. The runnable jar.
 ```
 
-Three axes at once: **modules** (bounded contexts) → **vertical slices** (features) → **layers** (api /
-application / domain / infrastructure). A feature's routes, endpoint, command and handler sit together.
+The dependency rule is a property of the build, not of a test. `payments-domain` cannot import Spring
+because Spring is not on its compile classpath; `payments-api` cannot import a JPA entity because
+`payments-infrastructure` is not on its classpath. `LayerModuleIsolationTest` reads the POMs and asserts
+each of these so they cannot drift.
 
----
+ArchUnit then covers what a POM cannot express: no JPA entity outside infrastructure, no
+`@Transactional` on a route, no Spring Data `Page` in a use case, no field injection.
+
+### Packages — the bounded contexts
+
+Package names are identical to the single-module layout; only the physical module differs. Three axes at
+once: **layer** (Maven module) → **bounded context** (package) → **vertical slice** (package).
+
+```
+payments-domain/src/main/java/com/innovatiopr/payments/
+├── shared/domain/                      Money, Result, DomainError, DomainEvent, AggregateRoot
+├── customers/                          CustomerId · CustomersApi        ← published contract
+│   └── domain/                         Customer, EmailAddress, PersonName, CustomerError
+├── accounts/                           AccountId · AccountsApi · AccountPosting · TransferPostings
+│   └── domain/                         Account, AccountNumber, AccountStatus, AccountError, events
+├── ledger/                             LedgerTransactionId · PostingReference · LedgerApi
+│   └── domain/                         LedgerTransaction, LedgerEntry, LedgerAccountRef, LedgerError
+└── payments/                           PaymentsApi
+    └── domain/                         PaymentTransaction, IdempotencyKey, TransactionReference, errors
+
+payments-application/src/main/java/com/innovatiopr/payments/
+├── shared/application/                 Command, Query, handlers, PageRequest/PageResult, ports
+├── customers/application/              CustomerRepository, CustomersApiAdapter
+├── customers/registration/application/     ← vertical slice
+├── customers/directory/application/        ← vertical slice
+├── accounts/application/               AccountRepository, AccountsApiAdapter
+├── accounts/{opening,details,status}/application/
+├── ledger/application/                 LedgerRepository, LedgerApiAdapter
+├── ledger/statements/application/
+├── payments/application/               ports, PaymentsApiAdapter
+└── payments/{transfer,deposits,withdrawals,transactions}/application/
+
+payments-infrastructure/src/main/java/com/innovatiopr/payments/
+├── shared/infrastructure/              GenericHibernateRepository, event publisher, SortColumns
+├── {customers,accounts,ledger,payments}/infrastructure/
+│                                       JPA entities, mappers, Hibernate repos, JdbcClient read models
+└── (resources) db/migration/           Flyway migrations
+
+payments-api/src/main/java/com/innovatiopr/payments/
+├── shared/api/                         ProblemDetails, ApiPaths, PagedResources, RequestValidator
+├── shared/api/docs/                    OpenApiConfiguration, OpenApiDocs, Scalar routes
+└── <context>/<slice>/api/              Routes, Endpoint, Request, Resource, Assembler
+
+payments-bootstrap/src/main/java/com/innovatiopr/payments/
+├── PaymentsApplication.java            @SpringBootApplication + @Modulithic
+└── DevelopmentDataSeeder.java          @Profile("local"), drives the published module APIs
+```
+
+A vertical slice is therefore split across `payments-application` and `payments-api`. The package path
+still reads as one slice (`payments.transfer.application` / `payments.transfer.api`) but the files are in
+different modules — the same trade .NET makes with feature folders inside each project. It buys the
+compile-time layer guarantee.
 
 ## 10. API routes
 
@@ -587,6 +615,15 @@ graph TD
 domain sits at the centre and depends on nothing but the JDK. Infrastructure implements ports the
 application declares — the dependency-inversion arrows are the dashed ones.
 
-The domain has no import of Spring, Hibernate, JPA, Jackson, HTTP, HATEOAS, Bean Validation, or any
-infrastructure package. Eight ArchUnit rules check each of those individually, so this is a property of
-the build rather than a claim in a document.
+Each box is a separate Maven module, so these arrows are the `<dependency>` entries in five POMs. The
+domain has no import of Spring, Hibernate, JPA, Jackson, HTTP, HATEOAS, Bean Validation or any
+infrastructure package — not because eight ArchUnit rules forbid it (they do, as a second line of
+defence) but because none of it is on the module's compile classpath:
+
+```console
+$ ./mvnw -pl payments-domain dependency:build-classpath
+jspecify-1.0.1.jar
+spring-modulith-api-2.1.1.jar     ← annotations only, provided scope
+junit-jupiter-6.0.3.jar           ← test
+assertj-core-3.27.7.jar           ← test
+```

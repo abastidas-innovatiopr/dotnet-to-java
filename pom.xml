@@ -12,10 +12,43 @@
   </parent>
 
   <groupId>com.innovatiopr</groupId>
-  <artifactId>payments-api</artifactId>
+  <artifactId>payments-parent</artifactId>
   <version>1.0.0-SNAPSHOT</version>
-  <name>payments-api</name>
-  <description>Production-style Payments API: DDD + Clean Architecture + Vertical Slices + CQRS + Modular Monolith</description>
+  <packaging>pom</packaging>
+  <name>payments-parent</name>
+  <description>Payments API: DDD + Clean Architecture + Vertical Slices + CQRS + Modular Monolith</description>
+
+  <!--
+    ============================================================================
+    One Maven module per Clean Architecture layer.
+
+    This is the .NET equivalent of separate .csproj projects, and it exists for one
+    reason: it makes the dependency rule a COMPILE-TIME guarantee rather than a test.
+
+    payments-domain's POM has no Spring on it at all, so `import
+    org.springframework.…` in an aggregate does not "fail a rule" - it fails to
+    resolve. The compiler enforces the architecture; ArchUnit then covers the finer
+    rules a POM cannot express (no JPA entities outside infrastructure, no
+    @Transactional on endpoints, and so on).
+
+    Dependencies point inward, and Maven refuses anything else:
+
+        payments-bootstrap  ──►  api, infrastructure, application, domain
+        payments-api        ──►  application ──► domain
+        payments-infrastructure ──► application ──► domain
+        payments-domain     ──►  (nothing)
+
+    api and infrastructure cannot see each other. Neither is listed in the other's
+    POM, so an accidental import is a build failure.
+    ============================================================================
+  -->
+  <modules>
+    <module>payments-domain</module>
+    <module>payments-application</module>
+    <module>payments-infrastructure</module>
+    <module>payments-api</module>
+    <module>payments-bootstrap</module>
+  </modules>
 
   <properties>
     <java.version>25</java.version>
@@ -35,171 +68,90 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+
+      <!-- The layer modules, so children declare them without repeating a version. -->
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-domain</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-application</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-infrastructure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.innovatiopr</groupId>
+        <artifactId>payments-api</artifactId>
+        <version>${project.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
   <dependencies>
-    <!-- ============ API layer ============ -->
+    <!-- Every module gets the same unit-test toolchain. -->
     <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-webmvc</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-hateoas</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-validation</artifactId>
-    </dependency>
-
-    <!-- ============ Persistence ============ -->
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-data-jpa</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-jdbc</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-flyway</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.flywaydb</groupId>
-      <artifactId>flyway-database-postgresql</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.postgresql</groupId>
-      <artifactId>postgresql</artifactId>
-      <scope>runtime</scope>
-    </dependency>
-
-    <!-- ============ Modular monolith ============ -->
-    <dependency>
-      <groupId>org.springframework.modulith</groupId>
-      <artifactId>spring-modulith-starter-core</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.modulith</groupId>
-      <artifactId>spring-modulith-starter-jdbc</artifactId>
-    </dependency>
-    <!-- Exposes /actuator/modulith: the live module structure and dependency graph. -->
-    <dependency>
-      <groupId>org.springframework.modulith</groupId>
-      <artifactId>spring-modulith-actuator</artifactId>
-      <scope>runtime</scope>
-    </dependency>
-
-    <!-- ============ Observability ============ -->
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-actuator</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-opentelemetry</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-registry-prometheus</artifactId>
-      <scope>runtime</scope>
-    </dependency>
-
-    <!-- ============ API documentation ============ -->
-    <dependency>
-      <groupId>org.springdoc</groupId>
-      <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
-      <version>${springdoc.version}</version>
-    </dependency>
-    <!--
-      scalar-core only: it bundles the Scalar UI bundle (scalar.js) as a webjar resource so the
-      docs UI works fully offline. The com.scalar.maven:scalar-webmvc starter is deliberately NOT
-      used - it is compiled against Spring Boot 3.5 and its entry in
-      META-INF/spring/...AutoConfiguration.imports is annotated @Configuration rather than
-      @AutoConfiguration, so Spring Boot 4 never evaluates it. We mount Scalar ourselves through a
-      RouterFunction instead (see api/docs/ScalarRoutes).
-    -->
-    <dependency>
-      <groupId>com.scalar.maven</groupId>
-      <artifactId>scalar-core</artifactId>
-      <version>${scalar.version}</version>
-    </dependency>
-
-    <!-- ============ Test ============ -->
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-test</artifactId>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>org.springframework.modulith</groupId>
-      <artifactId>spring-modulith-starter-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.modulith</groupId>
-      <artifactId>spring-modulith-docs</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>testcontainers-postgresql</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>testcontainers-junit-jupiter</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-testcontainers</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.tngtech.archunit</groupId>
-      <artifactId>archunit-junit5</artifactId>
-      <version>${archunit.version}</version>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
 
   <build>
-    <plugins>
-      <plugin>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-maven-plugin</artifactId>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <configuration>
-          <!-- Domain + application + architecture tests: fast, no Docker required. -->
-          <excludes>
-            <exclude>**/*IT.java</exclude>
-          </excludes>
-        </configuration>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-failsafe-plugin</artifactId>
-        <configuration>
-          <!-- Integration tests (*IT): Testcontainers PostgreSQL, requires Docker. -->
-          <includes>
-            <include>**/*IT.java</include>
-          </includes>
-        </configuration>
-        <executions>
-          <execution>
-            <goals>
-              <goal>integration-test</goal>
-              <goal>verify</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-    </plugins>
+    <pluginManagement>
+      <plugins>
+        <!--
+          Skipped by default so that `./mvnw -am -pl payments-bootstrap spring-boot:run`
+          works as one command. With -am the reactor also contains the parent and the four
+          library modules, and without this the plugin would try to run each of them and
+          fail on "Unable to find a suitable main class". payments-bootstrap sets
+          <skip>false</skip> and is the only module that runs or repackages.
+        -->
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <configuration>
+            <skip>true</skip>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <configuration>
+            <!-- Fast tests everywhere; *IT needs Docker and runs under failsafe. -->
+            <excludes>
+              <exclude>**/*IT.java</exclude>
+            </excludes>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <configuration>
+            <includes>
+              <include>**/*IT.java</include>
+            </includes>
+          </configuration>
+          <executions>
+            <execution>
+              <goals>
+                <goal>integration-test</goal>
+                <goal>verify</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </pluginManagement>
   </build>
 </project>

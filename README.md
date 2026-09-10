@@ -15,11 +15,81 @@ Spring Modulith 2.1 · Spring HATEOAS 3.1 · Flyway 12 · JUnit 6 · Testcontain
 
 ---
 
+## The build is the architecture
+
+Five Maven modules, one per Clean Architecture layer — the direct equivalent of separate `.csproj`
+projects in a .NET solution:
+
+```
+payments-parent  (pom)
+├── payments-domain           ── no framework on its classpath at all
+├── payments-application      ── depends on domain
+├── payments-infrastructure   ── depends on application
+├── payments-api              ── depends on application
+└── payments-bootstrap        ── depends on all four; the only runnable jar
+```
+
+This exists for one reason: **the dependency rule is enforced by the compiler, not by a test.**
+`payments-domain`'s POM has no Spring, no Hibernate, no Jackson, no servlet API. So
+`import org.springframework...` inside an aggregate does not "break a rule" — it does not resolve.
+
+Check it rather than trusting it:
+
+```console
+$ ./mvnw -pl payments-domain dependency:build-classpath
+jspecify-1.0.1.jar
+spring-modulith-api-2.1.1.jar     ← annotations only, provided scope
+junit-jupiter-6.0.3.jar           ← test
+assertj-core-3.27.7.jar           ← test
+```
+
+That is the whole compile classpath of the domain layer. `spring-modulith-api` is there solely for the
+`@ApplicationModule` annotations that declare the bounded-context graph; its only mandatory transitive
+dependency is `jspecify`, because `spring-context`, `spring-tx` and `spring-boot-autoconfigure` are all
+declared `<optional>` upstream.
+
+`payments-api` and `payments-infrastructure` do not appear in each other's POMs, so an endpoint cannot
+import a JPA entity and a repository cannot import a resource assembler — both are build failures, not
+review comments. `LayerModuleIsolationTest` asserts each of these properties so the POMs cannot quietly
+drift.
+
+**Layers are Maven modules; bounded contexts are packages.** The two axes are orthogonal and both are
+verified:
+
+| Axis | Mechanism | Enforced by |
+|---|---|---|
+| Layers (domain / application / infrastructure / api) | Maven modules | the compiler, then ArchUnit |
+| Bounded contexts (customers / accounts / ledger / payments) | packages within each module | Spring Modulith |
+
+So `accounts` exists in four modules — `payments-domain/…/accounts/domain/`,
+`payments-application/…/accounts/application/`, and so on — with package names unchanged. Spring
+Modulith reads the runtime classpath, so it still sees `accounts` as one module and still fails the build
+on a cross-context reach-in or a cycle.
+
+### What this costs
+
+Honest trade-offs, not free wins:
+
+- **A vertical slice is split across two modules.** `payments/transfer/application` lives in
+  `payments-application` and `payments/transfer/api` in `payments-api`. The package names still read as
+  one slice, but the files are no longer adjacent on disk. .NET makes the same trade with feature folders
+  inside each project.
+- **`-am -pl` is now required** to build or run one module (see above).
+- **Five POMs to maintain** instead of one, and a new dependency has to be placed deliberately rather
+  than added to a single list. That deliberation is the point, but it is friction.
+
+For a smaller service, one module with ArchUnit-enforced packages is a perfectly reasonable choice — and
+was the previous shape of this repository. The multi-module split earns its keep once "the domain must
+not depend on the framework" needs to be a guarantee rather than an agreement.
+
+---
+
 ## Quick start
 
 ```bash
-docker compose up -d                                        # PostgreSQL only
-./mvnw spring-boot:run -Dspring-boot.run.profiles=local      # seeds a demo dataset
+docker compose up -d                                                    # PostgreSQL only
+./mvnw -am -pl payments-bootstrap spring-boot:run \
+       -Dspring-boot.run.profiles=local                                 # seeds a demo dataset
 ```
 
 Then open **<http://localhost:8080/docs>** — the Scalar API reference, served offline from the jar.
@@ -48,7 +118,22 @@ client should look for a link rather than encode the bank's rules:
 ```bash
 ./mvnw test                 # unit + architecture tests, no Docker needed
 ./mvnw verify               # everything, including Testcontainers integration tests
+
+./mvnw -pl payments-domain dependency:tree   # see for yourself that the domain has no framework
 ```
+
+<details>
+<summary>Why <code>-am -pl</code>? (multi-module Maven for a .NET developer)</summary>
+
+`-pl payments-bootstrap` means "only this module" — the Maven equivalent of building one `.csproj`.
+`-am` means **also make** the modules it depends on. Without `-am`, Maven looks for
+`payments-api-1.0.0-SNAPSHOT.jar` in your local repository, doesn't find it, and fails — it will not
+infer that a sibling in the same build could produce it.
+
+`dotnet build` resolves project references automatically; Maven does not, and this is the single most
+common stumble when a .NET developer meets a multi-module reactor. Alternatively run `./mvnw install`
+once and plain `-pl` works from then on.
+</details>
 
 Requires **JDK 25** and Docker. The whole stack runs locally: no cloud, no broker, no cache, no external
 service.
@@ -86,7 +171,9 @@ curl -s -X POST localhost:8080/api/v1/transfers \
 | `app.MapGet` / `app.MapPost` | `RouterFunctions.route().GET(…).POST(…)` | |
 | `IServiceCollection` | `@Configuration` + `@Bean` | |
 | Built-in DI container | **Spring IoC container** | Constructor injection throughout |
-| Clean Architecture | Clean Architecture | Enforced by ArchUnit here |
+| Clean Architecture | Clean Architecture | Layers are **Maven modules**; the compiler enforces the dependency rule |
+| `Company.Domain.csproj` etc. | `payments-domain` etc. (Maven modules) | Same idea, same guarantee |
+| `dotnet build` resolves project refs | `./mvnw -am -pl <module>` | Maven needs `-am`; see the note above |
 | Aggregate Root | Aggregate Root | `AggregateRoot<ID>` base class |
 | Value Object | **Java `record`** | Immutable, structural equality, compact constructor validation |
 | Domain Events | Domain Events + **Spring Modulith** | With a persistent outbox |
@@ -370,12 +457,16 @@ Boot 4 is a bigger break than the version number suggests. Every item here cost 
 
 ## Testing
 
-| Layer | Tools | Spring? | Count |
+Tests live in the module they exercise, so `./mvnw -pl payments-domain test` runs the domain suite
+against a classpath that has no framework on it.
+
+| Module | Tools | Spring? | Count |
 |---|---|---|---|
-| Domain — aggregates, `Money`, `Result` | JUnit 6, AssertJ | No | 64 |
-| Application — handlers, pagination, sort allow-list | + Mockito | No | 31 |
-| Architecture — layering, modules | ArchUnit, Spring Modulith | No | 26 |
-| Integration — the whole stack | Testcontainers PostgreSQL | Yes | 62 |
+| `payments-domain` — aggregates, `Money`, `Result` | JUnit 6, AssertJ | No | 64 |
+| `payments-application` — handlers, pagination | + Mockito | No | 26 |
+| `payments-infrastructure` — sort allow-list | JUnit 6, AssertJ | No | 5 |
+| `payments-bootstrap` — ArchUnit, Modulith, POM isolation | ArchUnit, Spring Modulith | No | 26 |
+| `payments-bootstrap` — the whole stack | Testcontainers PostgreSQL | Yes | 62 |
 | **Total** | | | **183** |
 
 **Domain tests run without Spring** — no context, no database, milliseconds. That is the practical payoff

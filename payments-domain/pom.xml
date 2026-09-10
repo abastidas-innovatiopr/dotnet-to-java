@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.innovatiopr</groupId>
+    <artifactId>payments-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>payments-domain</artifactId>
+  <name>payments-domain</name>
+  <description>Aggregates, value objects, domain errors and domain events. Depends on the JDK.</description>
+
+  <!--
+    ============================================================================
+    THIS POM IS THE ARCHITECTURE.
+
+    Look at what is missing: no Spring, no Hibernate, no JPA, no Jackson, no
+    servlet API, no Bean Validation, no database driver. None of it is on this
+    module's compile classpath, so `import org.springframework.…` inside an
+    aggregate does not merely violate a convention - it does not compile.
+
+    That is a stronger guarantee than any test can give, and it is the whole
+    reason the layers are separate Maven modules instead of separate packages.
+
+    The single dependency is spring-modulith-api, and it earns its place:
+      * `provided` scope, so it is absent from the runtime classpath here;
+      * its only mandatory transitive dependency is jspecify (annotations only) -
+        spring-context, spring-tx and spring-boot-autoconfigure are all declared
+        <optional> upstream, so none of them arrive;
+      * it is needed solely for the @ApplicationModule annotations on the
+        bounded-context package-info files, which declare the module graph that
+        ModularityTest verifies.
+
+    Verify the claim rather than trusting it:
+        ./mvnw -pl payments-domain dependency:tree
+    ============================================================================
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+</project>
