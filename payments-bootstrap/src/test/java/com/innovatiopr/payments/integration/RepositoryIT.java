@@ -58,15 +58,15 @@ class RepositoryIT extends AbstractIntegrationTest {
 
     @BeforeEach
     void registerACustomer() {
-        customer = customers.register("Barbara", "Liskov", "barbara@example.com").orElseThrow();
+        customer = customers.register("Barbara", "Liskov", "barbara@example.com");
     }
 
     @Test
     @DisplayName("an aggregate survives the round trip through JPA unchanged")
     @Transactional
     void maps_an_account_aggregate_both_ways() {
-        AccountId id = accounts.open(customer, "USD").orElseThrow();
-        payments.deposit(id, new BigDecimal("123.45"), "USD", "Deposit").orElseThrow();
+        AccountId id = accounts.open(customer, "USD");
+        payments.deposit(id, new BigDecimal("123.45"), "USD", "Deposit");
 
         Account loaded = accountRepository.findById(id).orElseThrow();
 
@@ -93,7 +93,7 @@ class RepositoryIT extends AbstractIntegrationTest {
     @DisplayName("existsById is answered without materialising the aggregate")
     @Transactional
     void generic_exists_by_id() {
-        AccountId id = accounts.open(customer, "USD").orElseThrow();
+        AccountId id = accounts.open(customer, "USD");
 
         assertThat(accountRepository.existsById(id)).isTrue();
         assertThat(accountRepository.existsById(AccountId.generate())).isFalse();
@@ -104,7 +104,7 @@ class RepositoryIT extends AbstractIntegrationTest {
     @DisplayName("the specialised lookups the domain actually asked for")
     @Transactional
     void specialised_repository_operations() {
-        AccountId id = accounts.open(customer, "USD").orElseThrow();
+        AccountId id = accounts.open(customer, "USD");
         Account account = accountRepository.findById(id).orElseThrow();
         AccountNumber number = account.accountNumber();
 
@@ -134,7 +134,7 @@ class RepositoryIT extends AbstractIntegrationTest {
     @DisplayName("saving an existing aggregate updates rather than inserting")
     @Transactional
     void save_is_an_upsert_on_aggregate_identity() {
-        AccountId id = accounts.open(customer, "USD").orElseThrow();
+        AccountId id = accounts.open(customer, "USD");
         long before = count("accounts");
 
         Account account = accountRepository.findById(id).orElseThrow();
@@ -147,7 +147,7 @@ class RepositoryIT extends AbstractIntegrationTest {
     @Test
     @DisplayName("the unique index on account number is enforced by the database")
     void account_number_is_unique() {
-        AccountId first = accounts.open(customer, "USD").orElseThrow();
+        AccountId first = accounts.open(customer, "USD");
         String number = jdbc.sql("SELECT account_number FROM accounts WHERE id = :id")
                 .param("id", first.value()).query(String.class).single();
 
@@ -168,11 +168,11 @@ class RepositoryIT extends AbstractIntegrationTest {
     @DisplayName("a ledger transaction round-trips with all of its entries")
     @Transactional
     void ledger_aggregate_round_trip() {
-        AccountId source = accounts.open(customer, "USD").orElseThrow();
-        AccountId destination = accounts.open(customer, "USD").orElseThrow();
-        payments.deposit(source, new BigDecimal("100.00"), "USD", "Fund").orElseThrow();
+        AccountId source = accounts.open(customer, "USD");
+        AccountId destination = accounts.open(customer, "USD");
+        payments.deposit(source, new BigDecimal("100.00"), "USD", "Fund");
         UUID transactionId = payments.transfer(UUID.randomUUID().toString(), source, destination,
-                new BigDecimal("30.00"), "USD", "Round trip").orElseThrow();
+                new BigDecimal("30.00"), "USD", "Round trip");
 
         LedgerTransaction ledger = ledgerRepository
                 .findByReference(com.innovatiopr.payments.ledger.PostingReference.of(transactionId))
@@ -188,8 +188,8 @@ class RepositoryIT extends AbstractIntegrationTest {
     @DisplayName("monetary scale survives the database round trip exactly")
     @Transactional
     void money_scale_is_preserved() {
-        AccountId id = accounts.open(customer, "USD").orElseThrow();
-        payments.deposit(id, new BigDecimal("0.01"), "USD", "One cent").orElseThrow();
+        AccountId id = accounts.open(customer, "USD");
+        payments.deposit(id, new BigDecimal("0.01"), "USD", "One cent");
 
         Account loaded = accountRepository.findById(id).orElseThrow();
         assertThat(loaded.balance()).isEqualTo(Money.of("0.01", USD));

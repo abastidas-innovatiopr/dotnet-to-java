@@ -5,8 +5,10 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
-import io.swagger.v3.oas.models.parameters.HeaderParameter;
-import io.swagger.v3.oas.models.parameters.Parameter;
+import io.swagger.v3.oas.models.media.ArraySchema;
+import io.swagger.v3.oas.models.media.IntegerSchema;
+import io.swagger.v3.oas.models.media.ObjectSchema;
+import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.media.StringSchema;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -14,19 +16,20 @@ import org.springframework.context.annotation.Configuration;
 /**
  * API-level OpenAPI metadata: title, version, and the description Scalar renders as its introduction.
  *
- * <h2>Per-route documentation lives with the routes</h2>
- * springdoc discovers annotated controllers by reflection, and a {@code RouterFunction} is an opaque
- * object built at runtime — so by default the generated document contains <em>no paths at all</em> and a
- * documentation UI renders a blank page while everything appears to work. That is the third real cost of
- * functional routing, after losing {@code linkTo(methodOn(...))} and automatic {@code @Valid}.
+ * <h2>Per-operation documentation lives on the controller method</h2>
+ * springdoc discovers annotated controllers by reflection, so paths, request schemas and parameter types
+ * are generated from the signature and only the prose has to be written. Each method still declares an
+ * explicit {@code @Operation(operationId = ...)}: springdoc would otherwise derive the id from the Java
+ * method name and produce {@code getById}, {@code getById_1} and so on, silently renaming every operation
+ * in a generated client. That is the one piece of route metadata that cannot be left to inference.
  *
- * <p>Each route therefore declares its own operation through springdoc's {@code SpringdocRouteBuilder}
- * (see {@code TransferRoutes}), which keeps the documentation in the same call as the route so the two
- * cannot drift. Fragments shared across slices — the {@code Idempotency-Key} header, the pagination
- * parameters, the HAL and Problem Details responses — live in {@link OpenApiDocs}.
+ * <p>Fragments shared across slices — the {@code Idempotency-Key} header text, the pagination parameters
+ * and the common descriptions — live in {@link OpenApiDocs}, and the media type on each response is
+ * applied by {@link PaymentsOperationCustomizer}.
  *
- * <p>{@code OpenApiDocumentIT} asserts that every route reaches the document, so adding one with plain
- * {@code RouterFunctions.route()} fails the build rather than silently shrinking the API reference.
+ * <p>{@code OpenApiDocumentIT} asserts that every route reaches the document and that each carries its
+ * expected {@code operationId}, so a renamed method or a forgotten annotation fails the build rather than
+ * silently reshaping the API reference.
  */
 @Configuration(proxyBeanMethods = false)
 class OpenApiConfiguration {
@@ -73,33 +76,46 @@ class OpenApiConfiguration {
                         .contact(new Contact().name("Payments Platform"))
                         .license(new License().name("MIT")))
                 .components(new Components()
-                        .addParameters("IdempotencyKey", idempotencyKeyHeader())
-                        .addParameters("Page", queryParam("page", "Zero-based page number", "0"))
-                        .addParameters("Size", queryParam("size", "Page size (default 20, maximum 100)", "20"))
-                        .addParameters("Sort", queryParam("sort", "Whitelisted sort field", "createdAt"))
-                        .addParameters("Direction", queryParam("direction", "asc or desc", "desc")));
+                        .addSchemas("ProblemDetail", problemDetailSchema()));
     }
 
-    private static Parameter idempotencyKeyHeader() {
-        return new HeaderParameter()
-                .name("Idempotency-Key")
-                .required(true)
-                .description("""
-                        Client-generated key that makes this request safe to retry. Use the same key when
-                        resending after a timeout: the server guarantees the money moves at most once.
-                        8-255 characters of letters, digits, '.', '_', ':' or '-'. A UUID is a good choice.
-                        """)
-                .schema(new StringSchema().minLength(8).maxLength(255))
-                .example("6a1f4c2e-9d3b-4f1a-8c7e-2b5d0a9f3e11");
-    }
-
-    private static Parameter queryParam(String name, String description, String example) {
-        return new Parameter()
-                .in("query")
-                .name(name)
-                .required(false)
-                .description(description)
-                .schema(new StringSchema())
-                .example(example);
+    /**
+     * The RFC 9457 body every failure carries, declared once and referenced by
+     * {@link PaymentsOperationCustomizer} from every 4xx and 5xx response.
+     *
+     * <p>Written out by hand rather than derived from Spring's {@code ProblemDetail} class, because the
+     * interesting fields are the extensions this application adds — {@code code}, {@code errors} and
+     * {@code correlationId} — and those live in a property map that no schema generator can see.
+     */
+    private static Schema<?> problemDetailSchema() {
+        return new ObjectSchema()
+                .description("RFC 9457 problem document.")
+                .addProperty("type", new StringSchema()
+                        .description("Stable URI identifying the problem kind.")
+                        .example("https://api.payments.local/problems/account_insufficient_funds"))
+                .addProperty("title", new StringSchema().example("Business rule violated"))
+                .addProperty("status", new IntegerSchema().example(422))
+                .addProperty("detail", new StringSchema()
+                        .description("Human-readable explanation. Never contains secrets."))
+                .addProperty("instance", new StringSchema().example("/api/v1/transfers"))
+                .addProperty("code", new StringSchema()
+                        .description("Machine-readable identifier. Part of the published contract - "
+                                + "branch on this, never on `detail`.")
+                        .example("ACCOUNT_INSUFFICIENT_FUNDS"))
+                .addProperty("errors", new ArraySchema()
+                        .description("Present only when a request body failed Bean Validation: one entry "
+                                + "per offending field, sorted by field name.")
+                        .items(new ObjectSchema()
+                                .addProperty("field", new StringSchema().example("email"))
+                                .addProperty("message", new StringSchema()
+                                        .example("Email must be a valid address"))))
+                .addProperty("correlationId", new StringSchema()
+                        .description("Echoed from the request so a client can quote it in a support "
+                                + "ticket and an operator can find the request in the logs."))
+                .addProperty("traceId", new StringSchema().description("Distributed-tracing identifier."))
+                .addRequiredItem("type")
+                .addRequiredItem("title")
+                .addRequiredItem("status")
+                .addRequiredItem("code");
     }
 }

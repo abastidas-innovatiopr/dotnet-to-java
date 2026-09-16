@@ -3,7 +3,6 @@ package com.innovatiopr.payments.ledger.domain;
 import com.innovatiopr.payments.accounts.AccountId;
 import com.innovatiopr.payments.ledger.PostingReference;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -36,8 +35,7 @@ class LedgerTransactionTest {
         AccountId destination = AccountId.generate();
 
         LedgerTransaction ledger = LedgerTransaction
-                .recordTransfer(reference(), source, destination, usd("100.00"), "Rent", NOW)
-                .orElseThrow();
+                .recordTransfer(reference(), source, destination, usd("100.00"), "Rent", NOW);
 
         assertThat(ledger.entries()).hasSize(2);
         assertThat(ledger.totalDebits()).isEqualTo(usd("100.00"));
@@ -55,8 +53,7 @@ class LedgerTransactionTest {
         AccountId account = AccountId.generate();
 
         LedgerTransaction ledger = LedgerTransaction
-                .recordDeposit(reference(), account, usd("250.00"), "Opening deposit", NOW)
-                .orElseThrow();
+                .recordDeposit(reference(), account, usd("250.00"), "Opening deposit", NOW);
 
         assertThat(ledger.isBalanced()).isTrue();
 
@@ -71,8 +68,7 @@ class LedgerTransactionTest {
         AccountId account = AccountId.generate();
 
         LedgerTransaction ledger = LedgerTransaction
-                .recordWithdrawal(reference(), account, usd("40.00"), "ATM", NOW)
-                .orElseThrow();
+                .recordWithdrawal(reference(), account, usd("40.00"), "ATM", NOW);
 
         LedgerEntry debit = ledger.entries().stream().filter(LedgerEntry::isDebit).findFirst().orElseThrow();
         LedgerEntry credit = ledger.entries().stream().filter(LedgerEntry::isCredit).findFirst().orElseThrow();
@@ -84,8 +80,7 @@ class LedgerTransactionTest {
     @Test
     void recording_a_transfer_raises_LedgerTransactionRecorded() {
         LedgerTransaction ledger = LedgerTransaction
-                .recordTransfer(reference(), AccountId.generate(), AccountId.generate(), usd("10.00"), "x", NOW)
-                .orElseThrow();
+                .recordTransfer(reference(), AccountId.generate(), AccountId.generate(), usd("10.00"), "x", NOW);
 
         assertThat(ledger.domainEvents()).singleElement()
                 .isInstanceOf(LedgerTransactionRecorded.class);
@@ -120,10 +115,9 @@ class LedgerTransactionTest {
         // Every public factory funnels through one validation, so there is no way to construct an
         // unbalanced LedgerTransaction from application code at all.
         for (String amount : new String[]{"0.01", "1.00", "999999.99"}) {
-            Result<LedgerTransaction> result = LedgerTransaction.recordTransfer(
+            LedgerTransaction recorded = LedgerTransaction.recordTransfer(
                     reference(), AccountId.generate(), AccountId.generate(), usd(amount), "x", NOW);
-            assertThat(result.isSuccess()).isTrue();
-            assertThat(result.orElseThrow().isBalanced()).isTrue();
+            assertThat(recorded.isBalanced()).isTrue();
         }
     }
 }

@@ -3,7 +3,6 @@ package com.innovatiopr.payments.accounts.status.application;
 import com.innovatiopr.payments.accounts.application.AccountRepository;
 import com.innovatiopr.payments.shared.application.CommandHandler;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,7 +20,7 @@ public class CloseAccountHandler
     }
 
     @Override
-    public Result<AccountStatusResult> handle(AccountStatusCommands.CloseAccountCommand command) {
+    public AccountStatusResult handle(AccountStatusCommands.CloseAccountCommand command) {
         return lifecycle.apply(command.accountId(), (account, now) -> account.close(now));
     }
 }

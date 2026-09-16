@@ -5,11 +5,12 @@ import com.innovatiopr.payments.accounts.AccountPosting;
 import com.innovatiopr.payments.accounts.AccountsApi;
 import com.innovatiopr.payments.accounts.TransferPostings;
 import com.innovatiopr.payments.accounts.domain.Account;
-import com.innovatiopr.payments.accounts.domain.AccountError;
+import com.innovatiopr.payments.accounts.domain.AccountErrors;
 import com.innovatiopr.payments.accounts.opening.application.OpenAccountCommand;
+import com.innovatiopr.payments.accounts.opening.application.OpenAccountHandler;
+import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,7 +19,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Implements the Accounts module's published contract.
@@ -41,6 +41,11 @@ import java.util.Optional;
  * payment transaction and ledger rows written by the caller — and a failure afterwards would leave money
  * moved with no record of why. {@code MANDATORY} turns that mistake into an immediate exception instead of
  * a silent inconsistency.
+ *
+ * <p>The same propagation means a failure thrown here marks the <em>caller's</em> transaction
+ * rollback-only, which is exactly what a refused transfer should do: the debit is unwound along with
+ * everything else the caller had staged. A caller must therefore let it propagate rather than catch it
+ * and continue.
  */
 @Service
 class AccountsApiAdapter implements AccountsApi {
@@ -48,10 +53,10 @@ class AccountsApiAdapter implements AccountsApi {
     private final AccountRepository accounts;
     private final DomainEventPublisher events;
     private final Clock clock;
-    private final com.innovatiopr.payments.accounts.opening.application.OpenAccountHandler openAccount;
+    private final OpenAccountHandler openAccount;
 
     AccountsApiAdapter(AccountRepository accounts, DomainEventPublisher events, Clock clock,
-                       com.innovatiopr.payments.accounts.opening.application.OpenAccountHandler openAccount) {
+                       OpenAccountHandler openAccount) {
         this.accounts = accounts;
         this.events = events;
         this.clock = clock;
@@ -66,92 +71,72 @@ class AccountsApiAdapter implements AccountsApi {
 
     @Override
     @Transactional(readOnly = true)
-    public Result<Void> requireExists(AccountId accountId) {
-        return accounts.existsById(accountId)
-                ? Result.ok()
-                : Result.failure(AccountError.notFound(accountId));
+    public void requireExists(AccountId accountId) {
+        if (!accounts.existsById(accountId)) {
+            throw AccountErrors.notFound(accountId);
+        }
     }
 
     @Override
-    public Result<AccountId> open(com.innovatiopr.payments.customers.CustomerId customerId,
-                                  String currencyCode) {
-        return openAccount.handle(new OpenAccountCommand(customerId, currencyCode))
-                .map(opened -> AccountId.of(opened.accountId()));
+    public AccountId open(CustomerId customerId, String currencyCode) {
+        return AccountId.of(openAccount.handle(new OpenAccountCommand(customerId, currencyCode)).accountId());
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
-    public Result<TransferPostings> postTransfer(AccountId source, AccountId destination, Money amount) {
-        Result<List<Account>> locked = lockInDeterministicOrder(List.of(source, destination));
-        if (locked.isFailure()) {
-            return locked.propagate();
-        }
+    public TransferPostings postTransfer(AccountId source, AccountId destination, Money amount) {
+        List<Account> locked = lockInDeterministicOrder(List.of(source, destination));
 
-        Account from = locked.orElseThrow().stream().filter(a -> a.id().equals(source)).findFirst().orElseThrow();
-        Account to = locked.orElseThrow().stream().filter(a -> a.id().equals(destination)).findFirst().orElseThrow();
+        Account from = locked.stream().filter(a -> a.id().equals(source)).findFirst().orElseThrow();
+        Account to = locked.stream().filter(a -> a.id().equals(destination)).findFirst().orElseThrow();
 
         Instant now = clock.instant();
-        Result<Void> debit = from.debit(amount, now);
-        if (debit.isFailure()) {
-            return debit.propagate();
-        }
-        Result<Void> credit = to.credit(amount, now);
-        if (credit.isFailure()) {
-            return credit.propagate();
-        }
+        from.debit(amount, now);
+        to.credit(amount, now);
 
         accounts.save(from);
         accounts.save(to);
         events.publishFrom(from, to);
 
-        return Result.success(new TransferPostings(
+        return new TransferPostings(
                 new AccountPosting(from.id(), from.balance()),
-                new AccountPosting(to.id(), to.balance())));
+                new AccountPosting(to.id(), to.balance()));
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
-    public Result<AccountPosting> postDeposit(AccountId accountId, Money amount) {
+    public AccountPosting postDeposit(AccountId accountId, Money amount) {
         return applySingleLegged(accountId, (account, now) -> account.deposit(amount, now));
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
-    public Result<AccountPosting> postWithdrawal(AccountId accountId, Money amount) {
+    public AccountPosting postWithdrawal(AccountId accountId, Money amount) {
         return applySingleLegged(accountId, (account, now) -> account.withdraw(amount, now));
     }
 
-    private Result<AccountPosting> applySingleLegged(AccountId accountId, BalanceMovement movement) {
-        Optional<Account> found = accounts.findByIdForUpdate(accountId);
-        if (found.isEmpty()) {
-            return Result.failure(AccountError.notFound(accountId));
-        }
-        Account account = found.get();
-        Result<Void> applied = movement.apply(account, clock.instant());
-        if (applied.isFailure()) {
-            return applied.propagate();
-        }
+    private AccountPosting applySingleLegged(AccountId accountId, BalanceMovement movement) {
+        Account account = accounts.findByIdForUpdate(accountId)
+                .orElseThrow(() -> AccountErrors.notFound(accountId));
+        movement.apply(account, clock.instant());
         accounts.save(account);
         events.publishFrom(account);
-        return Result.success(new AccountPosting(account.id(), account.balance()));
+        return new AccountPosting(account.id(), account.balance());
     }
 
     /** Loads every account under a write lock, always in ascending id order. */
-    private Result<List<Account>> lockInDeterministicOrder(List<AccountId> ids) {
+    private List<Account> lockInDeterministicOrder(List<AccountId> ids) {
         List<AccountId> ordered = ids.stream().sorted().toList();
         List<Account> loaded = new ArrayList<>(ordered.size());
         for (AccountId id : ordered) {
-            Optional<Account> account = accounts.findByIdForUpdate(id);
-            if (account.isEmpty()) {
-                return Result.failure(AccountError.notFound(id));
-            }
-            loaded.add(account.get());
+            loaded.add(accounts.findByIdForUpdate(id)
+                    .orElseThrow(() -> AccountErrors.notFound(id)));
         }
-        return Result.success(loaded);
+        return loaded;
     }
 
     @FunctionalInterface
     private interface BalanceMovement {
-        Result<Void> apply(Account account, Instant now);
+        void apply(Account account, Instant now);
     }
 }

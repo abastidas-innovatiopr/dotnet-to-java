@@ -1,8 +1,7 @@
 package com.innovatiopr.payments.accounts.details.application;
 
-import com.innovatiopr.payments.accounts.domain.AccountError;
+import com.innovatiopr.payments.accounts.domain.AccountErrors;
 import com.innovatiopr.payments.shared.application.QueryHandler;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,9 +16,8 @@ public class GetBalanceHandler implements QueryHandler<GetBalanceQuery, AccountB
 
     @Override
     @Transactional(readOnly = true)
-    public Result<AccountBalance> handle(GetBalanceQuery query) {
+    public AccountBalance handle(GetBalanceQuery query) {
         return accounts.findBalance(query.accountId())
-                .map(Result::success)
-                .orElseGet(() -> Result.failure(AccountError.notFound(query.accountId())));
+                .orElseThrow(() -> AccountErrors.notFound(query.accountId()));
     }
 }

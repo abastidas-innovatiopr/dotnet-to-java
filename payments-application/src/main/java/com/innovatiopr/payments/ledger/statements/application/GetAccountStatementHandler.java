@@ -3,7 +3,6 @@ package com.innovatiopr.payments.ledger.statements.application;
 import com.innovatiopr.payments.accounts.AccountsApi;
 import com.innovatiopr.payments.shared.application.PageResult;
 import com.innovatiopr.payments.shared.application.QueryHandler;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,11 +20,8 @@ public class GetAccountStatementHandler
 
     @Override
     @Transactional(readOnly = true)
-    public Result<PageResult<StatementLine>> handle(GetAccountStatementQuery query) {
-        Result<Void> accountExists = accounts.requireExists(query.accountId());
-        if (accountExists.isFailure()) {
-            return accountExists.propagate();
-        }
-        return Result.success(statements.findForAccount(query.accountId(), query.from(), query.to(), query.page()));
+    public PageResult<StatementLine> handle(GetAccountStatementQuery query) {
+        accounts.requireExists(query.accountId());
+        return statements.findForAccount(query.accountId(), query.from(), query.to(), query.page());
     }
 }

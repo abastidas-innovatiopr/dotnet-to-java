@@ -3,11 +3,10 @@ package com.innovatiopr.payments.customers.registration.application;
 import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.customers.application.CustomerRepository;
 import com.innovatiopr.payments.customers.domain.Customer;
-import com.innovatiopr.payments.customers.domain.CustomerError;
+import com.innovatiopr.payments.customers.domain.CustomerErrors;
 import com.innovatiopr.payments.customers.domain.EmailAddress;
 import com.innovatiopr.payments.shared.application.CommandHandler;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,26 +35,18 @@ public class CreateCustomerHandler implements CommandHandler<CreateCustomerComma
     }
 
     @Override
-    public Result<CreateCustomerResult> handle(CreateCustomerCommand command) {
-        Result<EmailAddress> email = EmailAddress.create(command.email());
-        if (email.isFailure()) {
-            return email.propagate();
-        }
-        if (customers.existsByEmail(email.orElseThrow())) {
-            return Result.failure(CustomerError.emailAlreadyRegistered(email.orElseThrow().value()));
+    public CreateCustomerResult handle(CreateCustomerCommand command) {
+        EmailAddress email = EmailAddress.create(command.email());
+        if (customers.existsByEmail(email)) {
+            throw CustomerErrors.emailAlreadyRegistered(email.value());
         }
 
-        Result<Customer> created = Customer.register(CustomerId.generate(), command.firstName(),
+        Customer customer = Customer.register(CustomerId.generate(), command.firstName(),
                 command.lastName(), command.email(), clock.instant());
-        if (created.isFailure()) {
-            return created.propagate();
-        }
-
-        Customer customer = created.orElseThrow();
         customers.save(customer);
         events.publishFrom(customer);
 
-        return Result.success(new CreateCustomerResult(customer.id().value(), customer.name().firstName(),
-                customer.name().lastName(), customer.email().value(), customer.registeredAt()));
+        return new CreateCustomerResult(customer.id().value(), customer.name().firstName(),
+                customer.name().lastName(), customer.email().value(), customer.registeredAt());
     }
 }

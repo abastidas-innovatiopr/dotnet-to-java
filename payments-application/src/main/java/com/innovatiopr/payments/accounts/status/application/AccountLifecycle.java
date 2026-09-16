@@ -3,13 +3,11 @@ package com.innovatiopr.payments.accounts.status.application;
 import com.innovatiopr.payments.accounts.AccountId;
 import com.innovatiopr.payments.accounts.application.AccountRepository;
 import com.innovatiopr.payments.accounts.domain.Account;
-import com.innovatiopr.payments.accounts.domain.AccountError;
+import com.innovatiopr.payments.accounts.domain.AccountErrors;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
-import com.innovatiopr.payments.shared.domain.Result;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.Optional;
 
 /**
  * The load-apply-save-publish sequence shared by the three lifecycle handlers.
@@ -30,23 +28,17 @@ final class AccountLifecycle {
         this.clock = clock;
     }
 
-    Result<AccountStatusResult> apply(AccountId accountId, StatusTransition transition) {
-        Optional<Account> found = accounts.findByIdForUpdate(accountId);
-        if (found.isEmpty()) {
-            return Result.failure(AccountError.notFound(accountId));
-        }
-        Account account = found.get();
-        Result<Void> applied = transition.apply(account, clock.instant());
-        if (applied.isFailure()) {
-            return applied.propagate();
-        }
+    AccountStatusResult apply(AccountId accountId, StatusTransition transition) {
+        Account account = accounts.findByIdForUpdate(accountId)
+                .orElseThrow(() -> AccountErrors.notFound(accountId));
+        transition.apply(account, clock.instant());
         accounts.save(account);
         events.publishFrom(account);
-        return Result.success(new AccountStatusResult(account.id().value(), account.status().name()));
+        return new AccountStatusResult(account.id().value(), account.status().name());
     }
 
     @FunctionalInterface
     interface StatusTransition {
-        Result<Void> apply(Account account, Instant now);
+        void apply(Account account, Instant now);
     }
 }

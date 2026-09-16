@@ -1,7 +1,5 @@
 package com.innovatiopr.payments.accounts.domain;
 
-import com.innovatiopr.payments.shared.domain.Result;
-
 import java.security.SecureRandom;
 import java.util.Objects;
 import java.util.regex.Pattern;
@@ -22,15 +20,15 @@ public record AccountNumber(String value) {
         Objects.requireNonNull(value, "value");
     }
 
-    public static Result<AccountNumber> create(String raw) {
+    public static AccountNumber create(String raw) {
         if (raw == null || raw.isBlank()) {
-            return Result.failure(AccountError.invalidAccountNumber("Account number is required"));
+            throw AccountErrors.invalidAccountNumber("Account number is required");
         }
         String trimmed = raw.trim();
         if (!PATTERN.matcher(trimmed).matches()) {
-            return Result.failure(AccountError.invalidAccountNumber("Account number must be exactly 12 digits"));
+            throw AccountErrors.invalidAccountNumber("Account number must be exactly 12 digits");
         }
-        return Result.success(new AccountNumber(trimmed));
+        return new AccountNumber(trimmed);
     }
 
     /** Generates a random 12-digit number. Collisions are caught by the unique index on {@code accounts}. */

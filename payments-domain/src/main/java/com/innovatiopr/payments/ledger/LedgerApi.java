@@ -1,8 +1,8 @@
 package com.innovatiopr.payments.ledger;
 
 import com.innovatiopr.payments.accounts.AccountId;
+import com.innovatiopr.payments.shared.domain.DomainException;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
 
 /**
  * The Ledger module's published contract.
@@ -16,15 +16,20 @@ import com.innovatiopr.payments.shared.domain.Result;
  *
  * <p>Events are still published — but they describe what <em>did</em> happen, after the commit. They are
  * not the mechanism by which it happens.
+ *
+ * <p>That is also why a failure here throws rather than returning: the exception rolls back the balance
+ * changes the caller already staged, which is exactly the outcome the paragraph above demands.
+ *
+ * @throws DomainException when the requested postings would not balance
  */
 public interface LedgerApi {
 
-    Result<LedgerTransactionId> recordTransfer(PostingReference reference, AccountId source,
-                                               AccountId destination, Money amount, String description);
+    LedgerTransactionId recordTransfer(PostingReference reference, AccountId source,
+                                       AccountId destination, Money amount, String description);
 
-    Result<LedgerTransactionId> recordDeposit(PostingReference reference, AccountId account,
-                                              Money amount, String description);
+    LedgerTransactionId recordDeposit(PostingReference reference, AccountId account,
+                                      Money amount, String description);
 
-    Result<LedgerTransactionId> recordWithdrawal(PostingReference reference, AccountId account,
-                                                 Money amount, String description);
+    LedgerTransactionId recordWithdrawal(PostingReference reference, AccountId account,
+                                         Money amount, String description);
 }

@@ -10,7 +10,6 @@ import com.innovatiopr.payments.payments.transfer.application.TransferMoneyHandl
 import com.innovatiopr.payments.payments.withdrawals.application.WithdrawMoneyCommand;
 import com.innovatiopr.payments.payments.withdrawals.application.WithdrawMoneyHandler;
 import com.innovatiopr.payments.shared.application.RequestHasher;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -38,12 +37,9 @@ class PaymentsApiAdapter implements PaymentsApi {
     }
 
     @Override
-    public Result<UUID> transfer(String idempotencyKey, AccountId source, AccountId destination,
-                                 BigDecimal amount, String currencyCode, String reference) {
-        Result<IdempotencyKey> key = IdempotencyKey.create(idempotencyKey);
-        if (key.isFailure()) {
-            return key.propagate();
-        }
+    public UUID transfer(String idempotencyKey, AccountId source, AccountId destination,
+                         BigDecimal amount, String currencyCode, String reference) {
+        IdempotencyKey key = IdempotencyKey.create(idempotencyKey);
 
         // Same canonical form the HTTP layer uses, so a caller here and a caller over HTTP produce the
         // same fingerprint for the same request.
@@ -53,20 +49,20 @@ class PaymentsApiAdapter implements PaymentsApi {
                 currencyCode == null ? "" : currencyCode.toUpperCase(java.util.Locale.ROOT),
                 reference == null ? "" : reference.trim());
 
-        return transferMoney.handle(new TransferMoneyCommand(key.orElseThrow(),
-                        RequestHasher.sha256(canonical), source, destination, amount, currencyCode, reference))
-                .map(result -> result.transactionId());
+        return transferMoney.handle(new TransferMoneyCommand(key,
+                RequestHasher.sha256(canonical), source, destination, amount, currencyCode, reference))
+                .transactionId();
     }
 
     @Override
-    public Result<UUID> deposit(AccountId accountId, BigDecimal amount, String currencyCode, String reference) {
+    public UUID deposit(AccountId accountId, BigDecimal amount, String currencyCode, String reference) {
         return depositMoney.handle(new DepositMoneyCommand(accountId, amount, currencyCode, reference))
-                .map(result -> result.transactionId());
+                .transactionId();
     }
 
     @Override
-    public Result<UUID> withdraw(AccountId accountId, BigDecimal amount, String currencyCode, String reference) {
+    public UUID withdraw(AccountId accountId, BigDecimal amount, String currencyCode, String reference) {
         return withdrawMoney.handle(new WithdrawMoneyCommand(accountId, amount, currencyCode, reference))
-                .map(result -> result.transactionId());
+                .transactionId();
     }
 }

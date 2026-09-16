@@ -10,6 +10,7 @@ import com.innovatiopr.payments.ledger.statements.application.StatementLine;
 import com.innovatiopr.payments.payments.PaymentsApi;
 import com.innovatiopr.payments.shared.application.PageRequest;
 import com.innovatiopr.payments.shared.application.PageResult;
+import com.innovatiopr.payments.shared.domain.NotFoundException;
 import com.innovatiopr.payments.shared.application.SortSpec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +21,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The account statement read model: a paginated projection whose running balance is computed by a SQL
@@ -44,21 +46,21 @@ class AccountStatementIT extends AbstractIntegrationTest {
 
     @BeforeEach
     void buildAHistory() {
-        CustomerId customer = customers.register("Tony", "Hoare", "tony@example.com").orElseThrow();
-        account = accounts.open(customer, "USD").orElseThrow();
-        other = accounts.open(customer, "USD").orElseThrow();
+        CustomerId customer = customers.register("Tony", "Hoare", "tony@example.com");
+        account = accounts.open(customer, "USD");
+        other = accounts.open(customer, "USD");
 
-        payments.deposit(account, new BigDecimal("1000.00"), "USD", "Opening deposit").orElseThrow();
+        payments.deposit(account, new BigDecimal("1000.00"), "USD", "Opening deposit");
         for (int i = 1; i <= 10; i++) {
             payments.transfer(UUID.randomUUID().toString(), account, other,
-                    new BigDecimal("10.00"), "USD", "Outgoing " + i).orElseThrow();
+                    new BigDecimal("10.00"), "USD", "Outgoing " + i);
         }
-        payments.withdraw(account, new BigDecimal("50.00"), "USD", "Cash out").orElseThrow();
+        payments.withdraw(account, new BigDecimal("50.00"), "USD", "Cash out");
     }
 
     private PageResult<StatementLine> statement(int page, int size, String sortField) {
         return statements.handle(new GetAccountStatementQuery(account, null, null,
-                PageRequest.of(page, size, SortSpec.descending(sortField)))).orElseThrow();
+                PageRequest.of(page, size, SortSpec.descending(sortField))));
     }
 
     @Test
@@ -129,7 +131,7 @@ class AccountStatementIT extends AbstractIntegrationTest {
     void is_scoped_to_one_account() {
         PageResult<StatementLine> mine = statement(0, 50, "recordedAt");
         PageResult<StatementLine> theirs = statements.handle(new GetAccountStatementQuery(other, null, null,
-                PageRequest.of(0, 50, SortSpec.descending("recordedAt")))).orElseThrow();
+                PageRequest.of(0, 50, SortSpec.descending("recordedAt"))));
 
         assertThat(mine.totalItems()).isEqualTo(12);
         assertThat(theirs.totalItems()).isEqualTo(10);
@@ -154,23 +156,22 @@ class AccountStatementIT extends AbstractIntegrationTest {
         java.time.Instant future = java.time.Instant.now().plusSeconds(3600);
 
         PageResult<StatementLine> none = statements.handle(new GetAccountStatementQuery(account,
-                future, null, PageRequest.of(0, 50, SortSpec.descending("recordedAt")))).orElseThrow();
+                future, null, PageRequest.of(0, 50, SortSpec.descending("recordedAt"))));
         assertThat(none.items()).isEmpty();
         assertThat(none.totalItems()).isZero();
 
         PageResult<StatementLine> all = statements.handle(new GetAccountStatementQuery(account,
-                null, future, PageRequest.of(0, 50, SortSpec.descending("recordedAt")))).orElseThrow();
+                null, future, PageRequest.of(0, 50, SortSpec.descending("recordedAt"))));
         assertThat(all.totalItems()).isEqualTo(12);
     }
 
     @Test
     @DisplayName("a statement for an unknown account is a not-found error, not an empty page")
     void unknown_account_is_reported() {
-        var result = statements.handle(new GetAccountStatementQuery(AccountId.generate(), null, null,
-                PageRequest.of(0, 20, SortSpec.descending("recordedAt"))));
-
-        assertThat(result.isFailure()).isTrue();
-        assertThat(result.firstError().code()).isEqualTo("ACCOUNT_NOT_FOUND");
+        assertThatThrownBy(() -> statements.handle(new GetAccountStatementQuery(AccountId.generate(),
+                null, null, PageRequest.of(0, 20, SortSpec.descending("recordedAt")))))
+                .isInstanceOf(NotFoundException.class)
+                .extracting("code").isEqualTo("ACCOUNT_NOT_FOUND");
     }
 
     @Test

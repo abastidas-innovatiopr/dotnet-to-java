@@ -1,13 +1,14 @@
 package com.innovatiopr.payments.accounts.application;
 
 import com.innovatiopr.payments.accounts.AccountId;
+import com.innovatiopr.payments.accounts.AccountPosting;
 import com.innovatiopr.payments.accounts.TransferPostings;
 import com.innovatiopr.payments.accounts.domain.Account;
 import com.innovatiopr.payments.accounts.domain.AccountNumber;
 import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.DomainException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -22,6 +23,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -52,7 +54,7 @@ class AccountsApiAdapterTest {
 
     private Account accountWith(AccountId id, String balance) {
         Account account = Account.open(id, CustomerId.generate(), AccountNumber.fromStorage("123456789012"),
-                USD, CLOCK.instant()).orElseThrow();
+                USD, CLOCK.instant());
         if (!balance.equals("0.00")) {
             account.deposit(Money.of(balance, USD), CLOCK.instant());
         }
@@ -85,11 +87,10 @@ class AccountsApiAdapterTest {
         when(accounts.findByIdForUpdate(source)).thenReturn(Optional.of(accountWith(source, "100.00")));
         when(accounts.findByIdForUpdate(destination)).thenReturn(Optional.of(accountWith(destination, "10.00")));
 
-        Result<TransferPostings> result = adapter.postTransfer(source, destination, Money.of("40.00", USD));
+        TransferPostings postings = adapter.postTransfer(source, destination, Money.of("40.00", USD));
 
-        assertThat(result.isSuccess()).isTrue();
-        assertThat(result.orElseThrow().source().balanceAfter()).isEqualTo(Money.of("60.00", USD));
-        assertThat(result.orElseThrow().destination().balanceAfter()).isEqualTo(Money.of("50.00", USD));
+        assertThat(postings.source().balanceAfter()).isEqualTo(Money.of("60.00", USD));
+        assertThat(postings.destination().balanceAfter()).isEqualTo(Money.of("50.00", USD));
         verify(accounts, org.mockito.Mockito.times(2)).save(any(Account.class));
     }
 
@@ -118,9 +119,8 @@ class AccountsApiAdapterTest {
         when(accounts.findByIdForUpdate(source)).thenReturn(Optional.empty());
         when(accounts.findByIdForUpdate(destination)).thenReturn(Optional.of(accountWith(destination, "10.00")));
 
-        Result<TransferPostings> result = adapter.postTransfer(source, destination, Money.of("5.00", USD));
-
-        assertThat(result.firstError().code()).isEqualTo("ACCOUNT_NOT_FOUND");
+        assertThatThrownBy(() -> adapter.postTransfer(source, destination, Money.of("5.00", USD)))
+                .extracting("code").isEqualTo("ACCOUNT_NOT_FOUND");
         verify(accounts, never()).save(any());
         verify(events, never()).publishFrom(any());
     }
@@ -133,9 +133,8 @@ class AccountsApiAdapterTest {
         when(accounts.findByIdForUpdate(source)).thenReturn(Optional.of(accountWith(source, "5.00")));
         when(accounts.findByIdForUpdate(destination)).thenReturn(Optional.of(destinationAccount));
 
-        Result<TransferPostings> result = adapter.postTransfer(source, destination, Money.of("50.00", USD));
-
-        assertThat(result.firstError().code()).isEqualTo("ACCOUNT_INSUFFICIENT_FUNDS");
+        assertThatThrownBy(() -> adapter.postTransfer(source, destination, Money.of("50.00", USD)))
+                .extracting("code").isEqualTo("ACCOUNT_INSUFFICIENT_FUNDS");
         assertThat(destinationAccount.balance()).isEqualTo(Money.of("10.00", USD));
         verify(accounts, never()).save(any());
     }
@@ -160,10 +159,9 @@ class AccountsApiAdapterTest {
         AccountId id = lowerId();
         when(accounts.findByIdForUpdate(id)).thenReturn(Optional.of(accountWith(id, "10.00")));
 
-        Result<com.innovatiopr.payments.accounts.AccountPosting> result =
-                adapter.postDeposit(id, Money.of("15.00", USD));
+        AccountPosting posting = adapter.postDeposit(id, Money.of("15.00", USD));
 
-        assertThat(result.orElseThrow().balanceAfter()).isEqualTo(Money.of("25.00", USD));
+        assertThat(posting.balanceAfter()).isEqualTo(Money.of("25.00", USD));
     }
 
     @Test
@@ -171,10 +169,8 @@ class AccountsApiAdapterTest {
         AccountId id = lowerId();
         when(accounts.findByIdForUpdate(id)).thenReturn(Optional.of(accountWith(id, "10.00")));
 
-        Result<com.innovatiopr.payments.accounts.AccountPosting> result =
-                adapter.postWithdrawal(id, Money.of("15.00", USD));
-
-        assertThat(result.firstError().code()).isEqualTo("ACCOUNT_INSUFFICIENT_FUNDS");
+        assertThatThrownBy(() -> adapter.postWithdrawal(id, Money.of("15.00", USD)))
+                .extracting("code").isEqualTo("ACCOUNT_INSUFFICIENT_FUNDS");
         verify(accounts, never()).save(any());
     }
 
@@ -189,9 +185,8 @@ class AccountsApiAdapterTest {
         when(accounts.findByIdForUpdate(source)).thenReturn(Optional.of(accountWith(source, "100.00")));
         when(accounts.findByIdForUpdate(destination)).thenReturn(Optional.of(frozen));
 
-        Result<TransferPostings> result = adapter.postTransfer(source, destination, Money.of("10.00", USD));
-
-        assertThat(result.firstError().code()).isEqualTo("ACCOUNT_FROZEN");
+        assertThatThrownBy(() -> adapter.postTransfer(source, destination, Money.of("10.00", USD)))
+                .extracting("code").isEqualTo("ACCOUNT_FROZEN");
         verify(accounts, never()).save(any());
     }
 
@@ -203,16 +198,18 @@ class AccountsApiAdapterTest {
     }
 
     @Test
-    void a_currency_mismatch_is_a_domain_error_not_an_exception() {
+    void a_currency_mismatch_is_an_expected_business_failure_not_a_bug() {
         AccountId source = lowerId();
         AccountId destination = higherId();
         when(accounts.findByIdForUpdate(source)).thenReturn(Optional.of(accountWith(source, "100.00")));
         when(accounts.findByIdForUpdate(destination)).thenReturn(Optional.of(accountWith(destination, "0.00")));
 
-        Result<TransferPostings> result = adapter.postTransfer(source, destination,
-                Money.of("10.00", Currency.getInstance("EUR")));
-
-        assertThat(result.firstError().code()).isEqualTo("MONEY_CURRENCY_MISMATCH");
+        // A DomainException, not the CurrencyMismatchException that Money's arithmetic guard raises:
+        // the caller supplied the wrong currency, which the aggregate expects and refuses cleanly.
+        assertThatThrownBy(() -> adapter.postTransfer(source, destination,
+                Money.of("10.00", Currency.getInstance("EUR"))))
+                .isInstanceOf(DomainException.class)
+                .extracting("code").isEqualTo("MONEY_CURRENCY_MISMATCH");
     }
 
     @Test

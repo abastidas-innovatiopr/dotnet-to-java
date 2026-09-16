@@ -2,7 +2,6 @@ package com.innovatiopr.payments.payments.transactions.application;
 
 import com.innovatiopr.payments.shared.application.PageResult;
 import com.innovatiopr.payments.shared.application.QueryHandler;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,7 +17,7 @@ public class GetTransactionsHandler
 
     @Override
     @Transactional(readOnly = true)
-    public Result<PageResult<TransactionDetails>> handle(TransactionQueries.GetTransactionsQuery query) {
-        return Result.success(transactions.search(query.filter(), query.page()));
+    public PageResult<TransactionDetails> handle(TransactionQueries.GetTransactionsQuery query) {
+        return transactions.search(query.filter(), query.page());
     }
 }

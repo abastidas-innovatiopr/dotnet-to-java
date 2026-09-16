@@ -7,8 +7,7 @@ import com.innovatiopr.payments.accounts.domain.AccountNumber;
 import com.innovatiopr.payments.customers.CustomersApi;
 import com.innovatiopr.payments.shared.application.CommandHandler;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
-import com.innovatiopr.payments.shared.domain.MoneyError;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.MoneyErrors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,36 +39,27 @@ public class OpenAccountHandler implements CommandHandler<OpenAccountCommand, Op
     }
 
     @Override
-    public Result<OpenAccountResult> handle(OpenAccountCommand command) {
-        // Asked as a question, not answered here: Customers owns what "no such customer" means, and
-        // returns its own error inside the Result. This handler never names CustomerError, so the
-        // Accounts module does not reach into the Customers module's internals.
-        Result<Void> customerExists = customers.requireExists(command.customerId());
-        if (customerExists.isFailure()) {
-            return customerExists.propagate();
-        }
+    public OpenAccountResult handle(OpenAccountCommand command) {
+        // Asked as a question, not answered here: Customers owns what "no such customer" means and throws
+        // its own exception. This handler never names CustomerErrors, so the Accounts module does not
+        // reach into the Customers module's internals.
+        customers.requireExists(command.customerId());
 
         Currency currency;
         try {
             currency = Currency.getInstance(command.currencyCode());
         } catch (IllegalArgumentException | NullPointerException e) {
-            return Result.failure(new MoneyError.UnknownCurrency(String.valueOf(command.currencyCode())));
+            throw MoneyErrors.unknownCurrency(String.valueOf(command.currencyCode()));
         }
 
-        AccountNumber accountNumber = generateUnusedAccountNumber();
-        Result<Account> opened = Account.open(AccountId.generate(), command.customerId(), accountNumber,
-                currency, clock.instant());
-        if (opened.isFailure()) {
-            return opened.propagate();
-        }
-
-        Account account = opened.orElseThrow();
+        Account account = Account.open(AccountId.generate(), command.customerId(),
+                generateUnusedAccountNumber(), currency, clock.instant());
         accounts.save(account);
         events.publishFrom(account);
 
-        return Result.success(new OpenAccountResult(account.id().value(), account.customerId().value(),
+        return new OpenAccountResult(account.id().value(), account.customerId().value(),
                 account.accountNumber().value(), account.currency().getCurrencyCode(),
-                account.balance().amount(), account.status().name(), account.openedAt()));
+                account.balance().amount(), account.status().name(), account.openedAt());
     }
 
     /**

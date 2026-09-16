@@ -2,9 +2,8 @@ package com.innovatiopr.payments.payments.transfer.application;
 
 import com.innovatiopr.payments.payments.application.DuplicateIdempotencyKeyException;
 import com.innovatiopr.payments.payments.domain.IdempotencyRecord;
-import com.innovatiopr.payments.payments.domain.TransferError;
+import com.innovatiopr.payments.payments.domain.TransferErrors;
 import com.innovatiopr.payments.shared.application.CommandHandler;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -28,6 +27,11 @@ import java.util.Optional;
  * cannot be read from. The retry lookup therefore has to happen after that transaction has unwound, which
  * is only possible if this method is not inside it. {@link TransferReplayReader} then opens a genuinely
  * new transaction to read the winner.
+ *
+ * <p>The absence of a transaction here is also what makes the {@code catch} below legal. Catching a
+ * failure <em>inside</em> a transaction and continuing would leave it marked rollback-only, and the commit
+ * would fail with {@code UnexpectedRollbackException}. This method is outside any transaction, so by the
+ * time the catch runs the operation's transaction has already unwound.
  */
 @Service
 public class TransferMoneyHandler implements CommandHandler<TransferMoneyCommand, TransferMoneyResult> {
@@ -41,7 +45,7 @@ public class TransferMoneyHandler implements CommandHandler<TransferMoneyCommand
     }
 
     @Override
-    public Result<TransferMoneyResult> handle(TransferMoneyCommand command) {
+    public TransferMoneyResult handle(TransferMoneyCommand command) {
         Optional<IdempotencyRecord> alreadySeen = replayReader.find(command.idempotencyKey());
         if (alreadySeen.isPresent()) {
             return replayReader.replay(alreadySeen.get(), command.requestHash());
@@ -52,10 +56,13 @@ public class TransferMoneyHandler implements CommandHandler<TransferMoneyCommand
         } catch (DuplicateIdempotencyKeyException e) {
             // A concurrent request claimed the key while we were working. Our transaction rolled back, so
             // no money moved. The winner's record is committed and visible in a fresh transaction.
+            //
+            // This catch must stay narrowly typed. Widening it to RuntimeException would swallow a genuine
+            // business failure — insufficient funds, say — and misread it as a lost key race, sending the
+            // request down a replay lookup that has nothing to find.
             return replayReader.find(command.idempotencyKey())
                     .map(record -> replayReader.replay(record, command.requestHash()))
-                    .orElseGet(() -> Result.failure(
-                            TransferError.idempotencyKeyReused(command.idempotencyKey().value())));
+                    .orElseThrow(() -> TransferErrors.idempotencyKeyReused(command.idempotencyKey().value()));
         }
     }
 }

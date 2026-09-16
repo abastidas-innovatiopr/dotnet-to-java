@@ -1,7 +1,5 @@
 package com.innovatiopr.payments.payments.domain;
 
-import com.innovatiopr.payments.shared.domain.Result;
-
 import java.util.Objects;
 import java.util.regex.Pattern;
 
@@ -20,16 +18,16 @@ public record IdempotencyKey(String value) {
         Objects.requireNonNull(value, "value");
     }
 
-    public static Result<IdempotencyKey> create(String raw) {
+    public static IdempotencyKey create(String raw) {
         if (raw == null || raw.isBlank()) {
-            return Result.failure(TransferError.missingIdempotencyKey());
+            throw TransferErrors.missingIdempotencyKey();
         }
         String trimmed = raw.trim();
         if (!PATTERN.matcher(trimmed).matches()) {
-            return Result.failure(TransferError.invalidIdempotencyKey(
-                    "Idempotency key must be 8-255 characters of letters, digits, '.', '_', ':' or '-'"));
+            throw TransferErrors.invalidIdempotencyKey(
+                    "Idempotency key must be 8-255 characters of letters, digits, '.', '_', ':' or '-'");
         }
-        return Result.success(new IdempotencyKey(trimmed));
+        return new IdempotencyKey(trimmed);
     }
 
     public static IdempotencyKey fromStorage(String value) {

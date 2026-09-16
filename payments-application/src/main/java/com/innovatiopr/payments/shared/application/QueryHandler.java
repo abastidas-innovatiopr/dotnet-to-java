@@ -1,7 +1,5 @@
 package com.innovatiopr.payments.shared.application;
 
-import com.innovatiopr.payments.shared.domain.Result;
-
 /**
  * Handles exactly one {@link Query}.
  *
@@ -10,5 +8,5 @@ import com.innovatiopr.payments.shared.domain.Result;
  */
 public interface QueryHandler<Q extends Query, R> {
 
-    Result<R> handle(Q query);
+    R handle(Q query);
 }

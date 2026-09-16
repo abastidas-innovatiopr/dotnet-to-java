@@ -7,9 +7,9 @@ so one that stops being true fails it:
 |---|---|
 | **Maven modules** (5, one per layer) | The dependency rule, at compile time — the domain cannot import a framework that is not on its classpath |
 | **`LayerModuleIsolationTest`** (7 tests) | That the POMs stay isolated and do not drift |
-| **`ArchitectureTest`** (22 ArchUnit rules) | What a POM cannot express: no JPA entity outside infrastructure, no `@Transactional` on a route, no Spring Data `Page` in a use case |
+| **`ArchitectureTest`** (27 ArchUnit rules) | What a POM cannot express: no JPA entity outside infrastructure, no `@Transactional` on a controller, no Spring Data `Page` in a use case, no `Result` type returning a failure a caller can ignore |
 | **`ModularityTest`** (Spring Modulith) | Bounded-context boundaries and the absence of cycles |
-| **`OpenApiDocumentIT`** (7 tests) | That every functional route reaches the OpenAPI document |
+| **`OpenApiDocumentIT`** (8 tests) | That every route reaches the OpenAPI document under its published `operationId`, and that failures are documented as `problem+json` |
 
 ---
 
@@ -23,7 +23,7 @@ Four business contexts plus a deliberately small shared kernel.
 | **Accounts** | Balances, account lifecycle, and the invariants protecting them | Why money moved |
 | **Ledger** | The append-only double-entry record and statements | Balances (it can derive them, but does not hold them) |
 | **Payments** | Financial operations: transfers, deposits, withdrawals, transaction history, idempotency | Balance rules, posting rules |
-| **Shared Kernel** | `Money`, `Result`, `DomainError`, `DomainEvent`, `AggregateRoot`, pagination, API plumbing | Any business rule |
+| **Shared Kernel** | `Money`, the exception hierarchy, `DomainEvent`, `AggregateRoot`, pagination, API plumbing | Any business rule |
 
 Two decisions worth stating explicitly, because both are easy to get wrong:
 
@@ -69,7 +69,7 @@ Immutable, self-validating, and used instead of primitives wherever a domain con
 **Identity:** `CustomerId`, `AccountId`, `TransactionId`, `LedgerTransactionId`, `LedgerEntryId`, `PostingReference`
 **Descriptive:** `AccountNumber`, `EmailAddress`, `PersonName`, `TransactionReference`, `IdempotencyKey`, `IdempotencyRecord`
 **Sealed unions:** `LedgerAccountRef` (`Internal` | `External`)
-**Enums:** `AccountStatus`, `TransactionStatus`, `TransactionType`, `EntryDirection`, `ErrorType`
+**Enums:** `AccountStatus`, `TransactionStatus`, `TransactionType`, `EntryDirection`
 **Application:** `PageRequest`, `PageResult<T>`, `SortSpec`, `SortDirection`
 
 `openAccount(customerId, accountId)` cannot be called with the arguments swapped. With two `UUID`
@@ -101,77 +101,103 @@ produce a wrong balance.
 
 ## 5. Domain errors
 
-Expected business failures are first-class objects with stable machine-readable codes, returned inside
-`Result` — never thrown, never strings.
+Expected business failures are **thrown**, as typed exceptions carrying a stable machine-readable code —
+never returned inside a wrapper, never strings.
 
-### The sealed hierarchy in the brief does not compile
+### Why exceptions and not `Result<T>`
 
-The original design called for:
+An earlier design returned a `sealed interface Result<T>`, a transplant of .NET's `ErrorOr<T>`. It worked
+and it read well, and it was wrong for a reason that only shows up under a transaction:
+
+> **A `@Transactional` method that returns a failure commits.**
+
+`TransferMoneyOperation` mutates two managed `Account` entities in `postTransfer` and only then writes the
+ledger. With `Result`, a ledger failure *returned* from that method let Hibernate flush both balance
+changes at commit — money moved, no ledger rows, no payment transaction to explain it. The balance and the
+ledger disagreed permanently, in an application whose entire purpose is an auditable ledger.
+
+Throwing makes the rollback Spring's job. `TransferRollbackIT` injects a failing ledger and asserts the
+balances are untouched, so the old behaviour cannot come back quietly.
+
+The corollary is a rule for callers, and it is the one thing this model asks you to remember:
+
+> Code running inside a transaction must **not** catch a domain exception and carry on. The transaction is
+> already marked rollback-only, so the commit fails with `UnexpectedRollbackException`.
+
+`TransferMoneyHandler` is the one place that catches — and it deliberately has no `@Transactional` of its
+own, precisely so its `catch` runs after the operation's transaction has unwound.
+
+### The type is the classification
+
+There is no separate `ErrorType` enum. The exception's class carries the meaning, so nothing can disagree
+with anything else:
+
+| Exception | HTTP | Why |
+|---|---|---|
+| `ValidationException` | 400 | The value could not be accepted in any state of the world |
+| `NotFoundException` | 404 | — |
+| `ConflictException` | 409 | Clashes with existing state |
+| `DomainException` | 422 | Well-formed and understood, but an invariant forbids it. Insufficient funds is the canonical case: nothing is wrong with the JSON, so telling the client to fix its request would be a lie |
+| `ForbiddenException` | 403 | Reserved; nothing throws it until there is authentication |
+
+All five live in `payments-domain` and are plain `RuntimeException`s — no Spring, no Jakarta — so the
+domain-purity rules hold. They sit one layer further in than the .NET reference puts them, because the
+published module contracts (`AccountsApi`, `CustomersApi`, …) are declared in the domain module and name
+these types in their `@throws` clauses.
+
+The mapping to HTTP lives in `ApiExceptionHandler`, outside the domain. A second transport would map the
+same exceptions differently without touching a single aggregate.
+
+### Where they are constructed
+
+Never inline. Each bounded context owns a `*Errors` class — a `final class` with a private constructor and
+static factories — which is the single place a code is paired with its message:
 
 ```java
-sealed interface DomainError permits AccountError, MoneyError, TransferError, ... { }
-```
-
-This is rejected by the compiler:
-
-```
-error: class DomainError in unnamed module cannot extend a sealed class in a different package
-```
-
-JLS 8.1.1.2 requires every permitted subtype of a sealed type to live in the **same package**, unless the
-whole hierarchy is in one **named JPMS module**. Our errors deliberately live in their own bounded
-contexts, so a sealed root would either fail to compile or force every module's errors back into one
-package — destroying the boundaries this application exists to demonstrate.
-
-**The resolution:** the root `DomainError` is a plain interface; each module seals its *own* hierarchy
-with nested records in one file. Exhaustive `switch` still works inside a module. Across modules, callers
-use `code()` and `type()`, which is all the HTTP layer needs.
-
-```java
-public interface DomainError { String code(); String message(); ErrorType type(); }
-
-public sealed interface AccountError extends DomainError {
-    record NotFound(AccountId id) implements AccountError { ... }
-    record InsufficientFunds(AccountId id, Money requested, Money available) implements AccountError { ... }
+public final class AccountErrors {
+    public static NotFoundException notFound(AccountId id) { ... }
+    public static DomainException insufficientFunds(AccountId id, Money requested, Money available) { ... }
 }
 ```
 
+`AccountErrors`, `CustomerErrors`, `LedgerErrors`, `TransactionErrors`, `TransferErrors`, `MoneyErrors`.
+ArchUnit asserts they are final and that every public method returns a `RuntimeException`.
+
 ### Codes
 
-| Code | Type | Meaning |
+Every `code` is a published contract: clients may branch on it, so it does not change. It is reported in
+the `code` extension of every problem document.
+
+| Code | Exception | Meaning |
 |---|---|---|
-| `ACCOUNT_NOT_FOUND` | NOT_FOUND | No such account |
-| `ACCOUNT_NOT_ACTIVE` / `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | BUSINESS_RULE | Account cannot transact |
-| `ACCOUNT_INSUFFICIENT_FUNDS` | BUSINESS_RULE | Balance too low |
-| `ACCOUNT_NOT_EMPTY` | BUSINESS_RULE | Cannot close a funded account |
-| `ACCOUNT_INVALID_STATUS_TRANSITION` | BUSINESS_RULE | Illegal lifecycle move |
-| `ACCOUNT_NUMBER_ALREADY_IN_USE` | CONFLICT | Duplicate account number |
-| `MONEY_CURRENCY_MISMATCH` | BUSINESS_RULE | Currencies differ |
-| `MONEY_INVALID_AMOUNT` | VALIDATION | Non-positive amount |
-| `MONEY_UNKNOWN_CURRENCY` | VALIDATION | Not an ISO-4217 code |
-| `TRANSFER_SAME_ACCOUNT` | BUSINESS_RULE | Source equals destination |
-| `TRANSFER_IDEMPOTENCY_KEY_REQUIRED` / `_INVALID` | VALIDATION | Missing or malformed key |
-| `TRANSFER_IDEMPOTENCY_KEY_REUSED` | CONFLICT | Same key, different request |
-| `TRANSACTION_NOT_FOUND` | NOT_FOUND | No such transaction |
-| `TRANSACTION_INVALID_STATE_TRANSITION` | BUSINESS_RULE | e.g. completing twice |
-| `LEDGER_UNBALANCED` | BUSINESS_RULE | Debits ≠ credits |
-| `LEDGER_MIXED_CURRENCIES` / `LEDGER_TOO_FEW_ENTRIES` | BUSINESS_RULE | Malformed posting set |
-| `CUSTOMER_NOT_FOUND` | NOT_FOUND | No such customer |
-| `CUSTOMER_EMAIL_ALREADY_REGISTERED` | CONFLICT | Duplicate email |
-| `CUSTOMER_INVALID_EMAIL` / `_NAME` | VALIDATION | Malformed input |
+| `ACCOUNT_NOT_FOUND` | `NotFoundException` | No such account |
+| `ACCOUNT_NOT_ACTIVE` / `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | `DomainException` | Account cannot transact |
+| `ACCOUNT_INSUFFICIENT_FUNDS` | `DomainException` | Balance too low |
+| `ACCOUNT_NOT_EMPTY` | `DomainException` | Cannot close a funded account |
+| `ACCOUNT_INVALID_STATUS_TRANSITION` | `DomainException` | Illegal lifecycle move |
+| `ACCOUNT_NUMBER_ALREADY_IN_USE` | `ConflictException` | Duplicate account number |
+| `ACCOUNT_INVALID_NUMBER` | `ValidationException` | Malformed account number |
+| `MONEY_CURRENCY_MISMATCH` | `DomainException` | Currencies differ |
+| `MONEY_INVALID_AMOUNT` | `ValidationException` | Non-positive amount |
+| `MONEY_UNKNOWN_CURRENCY` | `ValidationException` | Not an ISO-4217 code |
+| `TRANSFER_SAME_ACCOUNT` | `DomainException` | Source equals destination |
+| `TRANSFER_IDEMPOTENCY_KEY_REQUIRED` / `_INVALID` | `ValidationException` | Missing or malformed key |
+| `TRANSFER_IDEMPOTENCY_KEY_REUSED` | `ConflictException` | Same key, different request |
+| `TRANSFER_INVALID_REFERENCE` | `ValidationException` | Reference too long |
+| `TRANSACTION_NOT_FOUND` | `NotFoundException` | No such transaction |
+| `TRANSACTION_INVALID_STATE_TRANSITION` | `DomainException` | e.g. completing twice |
+| `LEDGER_UNBALANCED` | `DomainException` | Debits ≠ credits |
+| `LEDGER_MIXED_CURRENCIES` / `LEDGER_TOO_FEW_ENTRIES` | `DomainException` | Malformed posting set |
+| `LEDGER_TRANSACTION_NOT_FOUND` | `NotFoundException` | No such ledger transaction |
+| `CUSTOMER_NOT_FOUND` | `NotFoundException` | No such customer |
+| `CUSTOMER_EMAIL_ALREADY_REGISTERED` | `ConflictException` | Duplicate email |
+| `CUSTOMER_INVALID_EMAIL` / `_NAME` | `ValidationException` | Malformed input |
 
-### ErrorType is not an HTTP status
-
-`ErrorType` is the domain's own classification — the same idea as `ErrorOr`'s `ErrorType` in .NET. The
-mapping to HTTP lives in `ProblemDetailFactory`, outside the domain. A second transport would map the
-same errors differently without touching a single aggregate.
-
-| ErrorType | HTTP | Why |
-|---|---|---|
-| `VALIDATION` | 400 | The request is malformed |
-| `NOT_FOUND` | 404 | — |
-| `CONFLICT` | 409 | Clashes with existing state |
-| `BUSINESS_RULE` | 422 | Well-formed and understood, but forbidden. Insufficient funds is the canonical case: nothing is wrong with the JSON |
+Transport-level failures raised before any handler runs carry codes of their own:
+`REQUEST_VALIDATION_FAILED` (400, with a per-field `errors` array), `INVALID_IDENTIFIER` (400),
+`REQUEST_BODY_UNREADABLE` (400), `ENDPOINT_NOT_FOUND` (404), `METHOD_NOT_ALLOWED` (405),
+`CONCURRENT_MODIFICATION` (409), `RESOURCE_ALREADY_EXISTS` (409), `INVALID_REFERENCE` (400),
+`UPSTREAM_TIMEOUT` (504), `INTERNAL_ERROR` (500).
 
 ---
 
@@ -228,7 +254,7 @@ graph TD
     Ledger[Ledger<br/>double-entry postings<br/>statements]
     Accounts[Accounts<br/>balances · lifecycle]
     Customers[Customers<br/>identity]
-    Shared[Shared Kernel<br/>Money · Result · DomainError<br/>DomainEvent · pagination]
+    Shared[Shared Kernel<br/>Money · exceptions<br/>DomainEvent · pagination]
 
     Payments --> Accounts
     Payments --> Ledger
@@ -259,9 +285,9 @@ it back would create a cycle. The Ledger declares its own `PostingReference` and
 the boundary — a miniature anti-corruption layer.
 
 **No module constructs another's errors.** `CustomersApi.requireExists` and `AccountsApi.requireExists`
-return the owning module's error *inside* a `Result`, so a caller propagates a `DomainError` it never
-names. Modulith rejected the earlier version, which called `AccountError.notFound(...)` from two other
-modules.
+throw the owning module's own exception, so a caller never names the concrete error type — it asks the
+question and lets the answer propagate. Modulith rejected the earlier version, which called
+`AccountErrors.notFound(...)` from two other modules.
 
 ---
 
@@ -329,13 +355,14 @@ once: **layer** (Maven module) → **bounded context** (package) → **vertical 
 
 ```
 payments-domain/src/main/java/com/innovatiopr/payments/
-├── shared/domain/                      Money, Result, DomainError, DomainEvent, AggregateRoot
+├── shared/domain/                      Money, DomainException, NotFoundException, ConflictException,
+│                                       ValidationException, ForbiddenException, DomainEvent, AggregateRoot
 ├── customers/                          CustomerId · CustomersApi        ← published contract
-│   └── domain/                         Customer, EmailAddress, PersonName, CustomerError
+│   └── domain/                         Customer, EmailAddress, PersonName, CustomerErrors
 ├── accounts/                           AccountId · AccountsApi · AccountPosting · TransferPostings
-│   └── domain/                         Account, AccountNumber, AccountStatus, AccountError, events
+│   └── domain/                         Account, AccountNumber, AccountStatus, AccountErrors, events
 ├── ledger/                             LedgerTransactionId · PostingReference · LedgerApi
-│   └── domain/                         LedgerTransaction, LedgerEntry, LedgerAccountRef, LedgerError
+│   └── domain/                         LedgerTransaction, LedgerEntry, LedgerAccountRef, LedgerErrors
 └── payments/                           PaymentsApi
     └── domain/                         PaymentTransaction, IdempotencyKey, TransactionReference, errors
 
@@ -358,9 +385,11 @@ payments-infrastructure/src/main/java/com/innovatiopr/payments/
 └── (resources) db/migration/           Flyway migrations
 
 payments-api/src/main/java/com/innovatiopr/payments/
-├── shared/api/                         ProblemDetails, ApiPaths, PagedResources, RequestValidator
-├── shared/api/docs/                    OpenApiConfiguration, OpenApiDocs, Scalar routes
-└── <context>/<slice>/api/              Routes, Endpoint, Request, Resource, Assembler
+├── shared/api/                         ProblemDetails, ApiExceptionHandler, ApiPaths, ApiResponses,
+│                                       PageQuery, QueryValues, PagedResources, CorrelationIdFilter
+├── shared/api/docs/                    OpenApiConfiguration, OpenApiDocs, PaymentsOperationCustomizer,
+│                                       Scalar routes (the one remaining RouterFunction)
+└── <context>/<slice>/api/              Controller, Request, Resource, Assembler
 
 payments-bootstrap/src/main/java/com/innovatiopr/payments/
 ├── PaymentsApplication.java            @SpringBootApplication + @Modulithic
@@ -374,7 +403,8 @@ compile-time layer guarantee.
 
 ## 10. API routes
 
-All functional (`RouterFunction`), grouped by feature. No `@RestController`.
+Annotated `@RestController` classes, one per vertical slice. The class-level `@RequestMapping` takes
+its path from an `ApiPaths` constant, so a path exists exactly once in the codebase.
 
 | Method | Path | Slice |
 |---|---|---|
@@ -397,21 +427,45 @@ All functional (`RouterFunction`), grouped by feature. No `@RestController`.
 **Status codes:** 201 + `Location` on creation · 200 on read and on idempotent replay · 400 transport
 validation · 404 not found · 409 conflict · 422 domain rule · 500 unexpected.
 
-### Three real costs of functional routing
+### One controller per slice, not per context
 
-Choosing `RouterFunction` over `@RestController` is not free, and the trade is rarely stated:
+The .NET reference groups Minimal API endpoints under a context root that delegates to per-feature
+groups. In Spring the two things that grouping carries — a shared path prefix and a documentation tag —
+are a class-level `@RequestMapping` and a `@Tag`, neither of which needs one class per context. Several
+controllers may share a base path; Spring only rejects identical method-and-pattern pairs.
 
-1. **`linkTo(methodOn(...))` is unavailable.** It reflects over an annotated controller method; there
-   isn't one. Replaced by `ApiPaths` — arguably safer, since a renamed path breaks compilation rather
-   than silently emitting a wrong link.
-2. **`@Valid` does nothing.** Bean Validation is run by the annotated-controller argument resolvers.
-   `RequestValidator` invokes it explicitly.
-3. **springdoc generates no paths by default.** It discovers annotated controllers by reflection; a
-   `RouterFunction` is an opaque runtime object, so the document came out empty and Scalar rendered a
-   blank page without anything failing. Solved with springdoc's `SpringdocRouteBuilder`, which takes an
-   operation builder alongside each route — documentation and route are declared together and cannot
-   drift. `OpenApiDocumentIT` asserts all 16 operations, their ids, summaries, tags, responses and
-   request schemas.
+So the controller matches the slice, as every other layer does. An aggregated `PaymentsController` would
+take nine constructor parameters and every slice change would touch one shared file.
+
+### The one cost that survived the move to controllers
+
+`linkTo(methodOn(...))` works again — but **only for links that stay inside one module**.
+`AccountResourceAssembler` emits links into `customers`, `payments` and `ledger`, and naming those
+controllers would import another module's internal package: legal Java that `ModularityTest` fails the
+build on, and rightly, since that coupling is what the module boundaries exist to prevent.
+
+Since some links cannot use the reflective builder, **all of them use `ApiPaths`**. One mechanism that
+always works beats two that each work half the time and leave the reader deciding which applies. It also
+fails earlier: a renamed path breaks compilation rather than silently emitting a wrong link.
+
+Two things the move restored:
+
+- **`@Valid` works**, so `RequestValidator` is gone. A body that breaks Bean Validation raises
+  `MethodArgumentNotValidException`, which `ApiExceptionHandler` renders as a 400 with a per-field
+  `errors` array.
+- **springdoc generates paths, schemas and parameter types by reflection**, so only the prose is written
+  by hand. Each method still declares an explicit `@Operation(operationId = …)`: springdoc would
+  otherwise derive the id from the Java method name and produce `getById_1`, silently renaming operations
+  in every generated client. `OpenApiDocumentIT` asserts all 16 ids exactly, along with summaries, tags,
+  response sets, request schemas, and that every 4xx is documented as `application/problem+json`.
+
+### Query parameters are bound as `String`
+
+`PageQuery` and `TransactionFilterQuery` are `@ParameterObject` records whose components are all
+`String`, and they parse leniently. Binding `page` and `size` to `Integer` would let Spring reject
+`?size=banana` with a 400 before the controller ran, and this API's documented contract is that an
+unparseable paging or filter value falls back to the default. `PageRequest` then clamps whatever it is
+given, so no request can ask for an unbounded result set.
 
 ---
 
@@ -491,8 +545,7 @@ gives the guarantee — against a defective code path, a bad migration, or a man
 
 ## 14. Transaction strategy
 
-`@Transactional` on **application handlers**. Never on a `RouterFunction`, a handler function, or a
-domain object.
+`@Transactional` on **application handlers**. Never on a controller and never on a domain object.
 
 ### Spring's transactional proxy, and the trap
 
@@ -501,8 +554,22 @@ delegates. So a call from one method of a bean to **another method of the same b
 the target and bypasses the proxy — the annotation silently does nothing. It is invisible until something
 needs to roll back.
 
-That is also why `@Transactional` on a functional endpoint is inert: the handler is invoked as a method
-reference by the `DispatcherServlet`, not through a Spring proxy. An ArchUnit rule forbids it.
+### Why the rule against `@Transactional` on a controller got *stronger*
+
+When this API routed functionally, `@Transactional` on a handler function was **inert** — the handler was
+invoked as a method reference, never through a proxy, so the annotation did nothing at all. The rule
+against it was a warning about a no-op.
+
+A `@RestController` is a proxied Spring bean, so the same annotation now does exactly what it says: it
+opens a real transaction, which then wraps JSON serialization, HATEOAS link assembly and the entire
+response write, holding a database connection for all of it. The ArchUnit rule forbidding it is unchanged
+in form and considerably more important in substance.
+
+### Failures roll back because they are thrown
+
+Spring rolls back on unchecked exceptions. Since every expected business failure is one (§5), a refused
+operation unwinds every write it had staged — including the balance changes `postTransfer` stages before
+the ledger is written. Under the previous `Result<T>` model those returned normally and committed.
 
 ### What a transfer commits together
 
@@ -568,8 +635,8 @@ leave the handler holding a dead connection.
 ```mermaid
 graph TD
     subgraph API["API — HTTP, Jackson, HATEOAS, Problem Details"]
-        Routes[RouterFunction beans]
-        Endpoints[Handler functions]
+        Controllers["@RestController classes"]
+        Advice[ApiExceptionHandler]
         Assemblers[Resource assemblers]
     end
 
@@ -582,7 +649,7 @@ graph TD
     subgraph DOM["Domain — no framework at all"]
         Aggregates[Aggregate roots]
         VOs[Value objects]
-        Errors[Domain errors]
+        Errors[Error factories + exceptions]
         Events[Domain events]
     end
 
@@ -593,8 +660,9 @@ graph TD
         Publisher[Spring event publisher]
     end
 
-    Routes --> Endpoints --> Handlers
-    Endpoints --> Assemblers
+    Controllers --> Handlers
+    Controllers --> Assemblers
+    Advice -.renders.-> Errors
     Handlers --> Ports
     Handlers --> Aggregates
     Facades --> Aggregates

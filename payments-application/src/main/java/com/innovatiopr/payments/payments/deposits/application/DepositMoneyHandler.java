@@ -3,7 +3,6 @@ package com.innovatiopr.payments.payments.deposits.application;
 import com.innovatiopr.payments.accounts.AccountPosting;
 import com.innovatiopr.payments.accounts.AccountsApi;
 import com.innovatiopr.payments.ledger.LedgerApi;
-import com.innovatiopr.payments.ledger.LedgerTransactionId;
 import com.innovatiopr.payments.ledger.PostingReference;
 import com.innovatiopr.payments.payments.application.PaymentTransactionRepository;
 import com.innovatiopr.payments.payments.domain.PaymentTransaction;
@@ -12,8 +11,7 @@ import com.innovatiopr.payments.payments.domain.TransactionReference;
 import com.innovatiopr.payments.shared.application.CommandHandler;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.MoneyError;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.MoneyErrors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,50 +53,34 @@ public class DepositMoneyHandler implements CommandHandler<DepositMoneyCommand, 
     }
 
     @Override
-    public Result<CashMovementResult> handle(DepositMoneyCommand command) {
+    public CashMovementResult handle(DepositMoneyCommand command) {
         Currency currency;
         try {
             currency = Currency.getInstance(command.currencyCode());
         } catch (IllegalArgumentException | NullPointerException e) {
-            return Result.failure(new MoneyError.UnknownCurrency(String.valueOf(command.currencyCode())));
+            throw MoneyErrors.unknownCurrency(String.valueOf(command.currencyCode()));
         }
 
         Money amount = Money.of(command.amount(), currency);
-        Result<TransactionReference> reference = TransactionReference.create(command.reference());
-        if (reference.isFailure()) {
-            return reference.propagate();
-        }
+        TransactionReference reference = TransactionReference.create(command.reference());
 
         Instant now = clock.instant();
         TransactionId transactionId = TransactionId.generate();
-        Result<PaymentTransaction> initiated = PaymentTransaction.initiateDeposit(transactionId,
-                command.accountId(), amount, reference.orElseThrow(), now);
-        if (initiated.isFailure()) {
-            return initiated.propagate();
-        }
-        PaymentTransaction transaction = initiated.orElseThrow();
+        PaymentTransaction transaction = PaymentTransaction.initiateDeposit(transactionId,
+                command.accountId(), amount, reference, now);
 
-        Result<AccountPosting> posting = accounts.postDeposit(command.accountId(), amount);
-        if (posting.isFailure()) {
-            return posting.propagate();
-        }
+        AccountPosting posting = accounts.postDeposit(command.accountId(), amount);
 
-        Result<LedgerTransactionId> ledgerResult = ledger.recordDeposit(
+        ledger.recordDeposit(
                 PostingReference.of(transactionId.value()), command.accountId(), amount,
-                reference.orElseThrow().value());
-        if (ledgerResult.isFailure()) {
-            return ledgerResult.propagate();
-        }
+                reference.value());
 
-        Result<Void> completed = transaction.complete(now);
-        if (completed.isFailure()) {
-            return completed.propagate();
-        }
+        transaction.complete(now);
         transactions.save(transaction);
         events.publishFrom(transaction);
 
-        return Result.success(new CashMovementResult(transactionId.value(), command.accountId().value(),
+        return new CashMovementResult(transactionId.value(), command.accountId().value(),
                 amount.amount(), currency.getCurrencyCode(), transaction.status().name(),
-                posting.orElseThrow().balanceAfter().amount(), now));
+                posting.balanceAfter().amount(), now);
     }
 }

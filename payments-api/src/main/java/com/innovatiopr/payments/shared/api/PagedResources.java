@@ -4,7 +4,8 @@ import com.innovatiopr.payments.shared.application.PageResult;
 import org.springframework.hateoas.IanaLinkRelations;
 import org.springframework.hateoas.Link;
 import org.springframework.hateoas.PagedModel;
-import org.springframework.web.servlet.function.ServerRequest;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.List;
@@ -32,34 +33,33 @@ public final class PagedResources {
     private PagedResources() {
     }
 
-    public static <T> PagedModel<T> of(PageResult<?> result, List<T> content, ServerRequest request,
-                                       String baseHref) {
+    public static <T> PagedModel<T> of(PageResult<?> result, List<T> content, String baseHref) {
         PagedModel.PageMetadata metadata = new PagedModel.PageMetadata(
                 result.size(), result.page(), result.totalItems(), result.totalPages());
 
         PagedModel<T> model = PagedModel.of(content, metadata);
-        model.add(Link.of(pageHref(request, baseHref, result.page(), result.size()), IanaLinkRelations.SELF));
+        model.add(Link.of(pageHref(baseHref, result.page(), result.size()), IanaLinkRelations.SELF));
 
         int lastPage = Math.max(result.totalPages() - 1, 0);
         if (result.totalPages() > 0) {
-            model.add(Link.of(pageHref(request, baseHref, 0, result.size()), IanaLinkRelations.FIRST));
-            model.add(Link.of(pageHref(request, baseHref, lastPage, result.size()), IanaLinkRelations.LAST));
+            model.add(Link.of(pageHref(baseHref, 0, result.size()), IanaLinkRelations.FIRST));
+            model.add(Link.of(pageHref(baseHref, lastPage, result.size()), IanaLinkRelations.LAST));
         }
         if (result.hasPrevious()) {
-            model.add(Link.of(pageHref(request, baseHref, result.page() - 1, result.size()),
+            model.add(Link.of(pageHref(baseHref, result.page() - 1, result.size()),
                     IanaLinkRelations.PREV));
         }
         if (result.hasNext()) {
-            model.add(Link.of(pageHref(request, baseHref, result.page() + 1, result.size()),
+            model.add(Link.of(pageHref(baseHref, result.page() + 1, result.size()),
                     IanaLinkRelations.NEXT));
         }
         return model;
     }
 
     /** Rebuilds the request's query string with a new page number and the effective page size. */
-    private static String pageHref(ServerRequest request, String baseHref, int page, int size) {
+    private static String pageHref(String baseHref, int page, int size) {
         UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(baseHref);
-        request.params().forEach((name, values) -> {
+        currentQueryParams().forEach((name, values) -> {
             if (!"page".equals(name) && !"size".equals(name)) {
                 values.forEach(value -> builder.queryParam(name, value));
             }
@@ -67,5 +67,9 @@ public final class PagedResources {
         builder.queryParam("page", page);
         builder.queryParam("size", size);
         return builder.build().toUriString();
+    }
+
+    private static MultiValueMap<String, String> currentQueryParams() {
+        return ServletUriComponentsBuilder.fromCurrentRequest().build().getQueryParams();
     }
 }

@@ -3,9 +3,9 @@ package com.innovatiopr.payments.accounts.domain;
 import com.innovatiopr.payments.accounts.AccountId;
 import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.shared.domain.DomainEvent;
-import com.innovatiopr.payments.shared.domain.ErrorType;
+import com.innovatiopr.payments.shared.domain.DomainException;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.ValidationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -18,6 +18,7 @@ import java.util.Currency;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for the Account aggregate. No Spring, no database — the aggregate is a plain object, which is
@@ -40,7 +41,7 @@ class AccountTest {
 
     private static Account newAccount() {
         return Account.open(AccountId.generate(), CustomerId.generate(),
-                AccountNumber.fromStorage("123456789012"), USD, CLOCK.instant()).orElseThrow();
+                AccountNumber.fromStorage("123456789012"), USD, CLOCK.instant());
     }
 
     private static void fund(Account target, String amount) {
@@ -77,9 +78,8 @@ class AccountTest {
 
         @Test
         void increase_the_balance_and_record_the_fact() {
-            Result<Void> result = account.deposit(usd("250.00"), CLOCK.instant());
+            account.deposit(usd("250.00"), CLOCK.instant());
 
-            assertThat(result.isSuccess()).isTrue();
             assertThat(account.balance()).isEqualTo(usd("750.00"));
             assertThat(account.domainEvents()).singleElement()
                     .isInstanceOf(AccountEvents.MoneyDeposited.class);
@@ -87,15 +87,17 @@ class AccountTest {
 
         @Test
         void reject_a_zero_amount() {
-            Result<Void> result = account.deposit(Money.zero(USD), CLOCK.instant());
-            assertThat(result.firstError().code()).isEqualTo("MONEY_INVALID_AMOUNT");
+            assertThatThrownBy(() -> account.deposit(Money.zero(USD), CLOCK.instant()))
+                    .isInstanceOf(ValidationException.class)
+                    .extracting("code").isEqualTo("MONEY_INVALID_AMOUNT");
             assertThat(account.balance()).isEqualTo(usd("500.00"));
         }
 
         @Test
         void reject_a_foreign_currency() {
-            Result<Void> result = account.deposit(Money.of("10.00", EUR), CLOCK.instant());
-            assertThat(result.firstError().code()).isEqualTo("MONEY_CURRENCY_MISMATCH");
+            assertThatThrownBy(() -> account.deposit(Money.of("10.00", EUR), CLOCK.instant()))
+                    .isInstanceOf(DomainException.class)
+                    .extracting("code").isEqualTo("MONEY_CURRENCY_MISMATCH");
         }
     }
 
@@ -105,29 +107,31 @@ class AccountTest {
 
         @Test
         void reduce_the_balance() {
-            assertThat(account.withdraw(usd("200.00"), CLOCK.instant()).isSuccess()).isTrue();
+            account.withdraw(usd("200.00"), CLOCK.instant());
             assertThat(account.balance()).isEqualTo(usd("300.00"));
         }
 
         @Test
         void may_empty_the_account_exactly() {
-            assertThat(account.withdraw(usd("500.00"), CLOCK.instant()).isSuccess()).isTrue();
+            account.withdraw(usd("500.00"), CLOCK.instant());
             assertThat(account.balance().isZero()).isTrue();
         }
 
         @Test
         void are_refused_when_funds_are_insufficient() {
-            Result<Void> result = account.withdraw(usd("500.01"), CLOCK.instant());
-
-            assertThat(result.firstError().code()).isEqualTo("ACCOUNT_INSUFFICIENT_FUNDS");
-            assertThat(result.firstError().type()).isEqualTo(ErrorType.BUSINESS_RULE);
+            // A DomainException, not a ValidationException: the request is well formed, the domain
+            // simply refuses it in the account's current state. That is the 422-versus-400 line.
+            assertThatThrownBy(() -> account.withdraw(usd("500.01"), CLOCK.instant()))
+                    .isInstanceOf(DomainException.class)
+                    .extracting("code").isEqualTo("ACCOUNT_INSUFFICIENT_FUNDS");
             assertThat(account.balance()).isEqualTo(usd("500.00"));
             assertThat(account.domainEvents()).isEmpty();
         }
 
         @Test
         void a_rejected_debit_leaves_no_trace() {
-            account.debit(usd("9999.00"), CLOCK.instant());
+            assertThatThrownBy(() -> account.debit(usd("9999.00"), CLOCK.instant()))
+                    .isInstanceOf(DomainException.class);
             assertThat(account.balance()).isEqualTo(usd("500.00"));
             assertThat(account.domainEvents()).isEmpty();
         }
@@ -153,31 +157,32 @@ class AccountTest {
 
         @Test
         void cannot_send_money() {
-            assertThat(account.withdraw(usd("1.00"), CLOCK.instant()).firstError().code())
-                    .isEqualTo("ACCOUNT_FROZEN");
+            assertThatThrownBy(() -> account.withdraw(usd("1.00"), CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_FROZEN");
         }
 
         @Test
         void cannot_receive_money_either() {
             // A frozen account is not merely "read only for the owner" - it is out of the payment
             // network in both directions, which is why the HATEOAS links drop `deposit` too.
-            assertThat(account.credit(usd("1.00"), CLOCK.instant()).firstError().code())
-                    .isEqualTo("ACCOUNT_FROZEN");
-            assertThat(account.deposit(usd("1.00"), CLOCK.instant()).firstError().code())
-                    .isEqualTo("ACCOUNT_FROZEN");
+            assertThatThrownBy(() -> account.credit(usd("1.00"), CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_FROZEN");
+            assertThatThrownBy(() -> account.deposit(usd("1.00"), CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_FROZEN");
         }
 
         @Test
         void can_be_unfrozen() {
-            assertThat(account.unfreeze(CLOCK.instant()).isSuccess()).isTrue();
+            account.unfreeze(CLOCK.instant());
             assertThat(account.status()).isEqualTo(AccountStatus.ACTIVE);
-            assertThat(account.deposit(usd("1.00"), CLOCK.instant()).isSuccess()).isTrue();
+            account.deposit(usd("1.00"), CLOCK.instant());
+            assertThat(account.balance()).isEqualTo(usd("501.00"));
         }
 
         @Test
         void freezing_twice_is_a_no_op_rather_than_an_error() {
-            Result<Void> again = account.freeze(CLOCK.instant());
-            assertThat(again.isSuccess()).isTrue();
+            account.freeze(CLOCK.instant());
+            assertThat(account.status()).isEqualTo(AccountStatus.FROZEN);
             assertThat(account.domainEvents()).isEmpty();
         }
     }
@@ -188,15 +193,15 @@ class AccountTest {
 
         @Test
         void is_refused_while_the_account_holds_money() {
-            Result<Void> result = account.close(CLOCK.instant());
-            assertThat(result.firstError().code()).isEqualTo("ACCOUNT_NOT_EMPTY");
+            assertThatThrownBy(() -> account.close(CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_NOT_EMPTY");
             assertThat(account.status()).isEqualTo(AccountStatus.ACTIVE);
         }
 
         @Test
         void succeeds_once_the_balance_is_zero() {
             account.withdraw(usd("500.00"), CLOCK.instant());
-            assertThat(account.close(CLOCK.instant()).isSuccess()).isTrue();
+            account.close(CLOCK.instant());
             assertThat(account.status()).isEqualTo(AccountStatus.CLOSED);
         }
 
@@ -205,10 +210,10 @@ class AccountTest {
             account.withdraw(usd("500.00"), CLOCK.instant());
             account.close(CLOCK.instant());
 
-            assertThat(account.deposit(usd("1.00"), CLOCK.instant()).firstError().code())
-                    .isEqualTo("ACCOUNT_CLOSED");
-            assertThat(account.credit(usd("1.00"), CLOCK.instant()).firstError().code())
-                    .isEqualTo("ACCOUNT_CLOSED");
+            assertThatThrownBy(() -> account.deposit(usd("1.00"), CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_CLOSED");
+            assertThatThrownBy(() -> account.credit(usd("1.00"), CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_CLOSED");
         }
 
         @Test
@@ -216,10 +221,10 @@ class AccountTest {
             account.withdraw(usd("500.00"), CLOCK.instant());
             account.close(CLOCK.instant());
 
-            assertThat(account.unfreeze(CLOCK.instant()).firstError().code())
-                    .isEqualTo("ACCOUNT_INVALID_STATUS_TRANSITION");
-            assertThat(account.freeze(CLOCK.instant()).firstError().code())
-                    .isEqualTo("ACCOUNT_INVALID_STATUS_TRANSITION");
+            assertThatThrownBy(() -> account.unfreeze(CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_INVALID_STATUS_TRANSITION");
+            assertThatThrownBy(() -> account.freeze(CLOCK.instant()))
+                    .extracting("code").isEqualTo("ACCOUNT_INVALID_STATUS_TRANSITION");
         }
     }
 

@@ -7,7 +7,6 @@ import com.innovatiopr.payments.ledger.PostingReference;
 import com.innovatiopr.payments.ledger.domain.LedgerTransaction;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,36 +36,32 @@ class LedgerApiAdapter implements LedgerApi {
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
-    public Result<LedgerTransactionId> recordTransfer(PostingReference reference, AccountId source,
-                                                       AccountId destination, Money amount, String description) {
+    public LedgerTransactionId recordTransfer(PostingReference reference, AccountId source,
+                                              AccountId destination, Money amount, String description) {
         return record(() -> LedgerTransaction.recordTransfer(reference, source, destination, amount,
                 description, clock.instant()));
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
-    public Result<LedgerTransactionId> recordDeposit(PostingReference reference, AccountId account,
-                                                      Money amount, String description) {
+    public LedgerTransactionId recordDeposit(PostingReference reference, AccountId account,
+                                             Money amount, String description) {
         return record(() -> LedgerTransaction.recordDeposit(reference, account, amount, description,
                 clock.instant()));
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
-    public Result<LedgerTransactionId> recordWithdrawal(PostingReference reference, AccountId account,
-                                                         Money amount, String description) {
+    public LedgerTransactionId recordWithdrawal(PostingReference reference, AccountId account,
+                                                Money amount, String description) {
         return record(() -> LedgerTransaction.recordWithdrawal(reference, account, amount, description,
                 clock.instant()));
     }
 
-    private Result<LedgerTransactionId> record(Supplier<Result<LedgerTransaction>> factory) {
-        Result<LedgerTransaction> created = factory.get();
-        if (created.isFailure()) {
-            return created.propagate();
-        }
-        LedgerTransaction transaction = created.orElseThrow();
+    private LedgerTransactionId record(Supplier<LedgerTransaction> factory) {
+        LedgerTransaction transaction = factory.get();
         ledger.save(transaction);
         events.publishFrom(transaction);
-        return Result.success(transaction.id());
+        return transaction.id();
     }
 }

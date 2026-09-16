@@ -3,7 +3,7 @@ package com.innovatiopr.payments.payments.domain;
 import com.innovatiopr.payments.accounts.AccountId;
 import com.innovatiopr.payments.shared.domain.AggregateRoot;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.MoneyErrors;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -51,41 +51,41 @@ public final class PaymentTransaction extends AggregateRoot<TransactionId> {
     }
 
     /** Starts a transfer in PENDING. Rejects a transfer to the same account before any money moves. */
-    public static Result<PaymentTransaction> initiateTransfer(TransactionId id, AccountId source,
-                                                              AccountId destination, Money amount,
-                                                              TransactionReference reference, Instant now) {
+    public static PaymentTransaction initiateTransfer(TransactionId id, AccountId source,
+                                                      AccountId destination, Money amount,
+                                                      TransactionReference reference, Instant now) {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(destination, "destination");
         if (source.equals(destination)) {
-            return Result.failure(TransferError.sameAccount(source));
+            throw TransferErrors.sameAccount(source);
         }
-        if (!amount.isPositive()) {
-            return Result.failure(com.innovatiopr.payments.shared.domain.MoneyError.amountMustBePositive());
-        }
+        requirePositive(amount);
 
         PaymentTransaction transaction = new PaymentTransaction(id, TransactionType.TRANSFER, source,
                 destination, amount, reference, TransactionStatus.PENDING, now, null, null);
         transaction.raise(new PaymentEvents.TransferInitiated(UUID.randomUUID(), now, id.toString(),
                 source.toString(), destination.toString(), amount.amount(), amount.currency().getCurrencyCode()));
-        return Result.success(transaction);
+        return transaction;
     }
 
-    public static Result<PaymentTransaction> initiateDeposit(TransactionId id, AccountId account, Money amount,
-                                                             TransactionReference reference, Instant now) {
-        if (!amount.isPositive()) {
-            return Result.failure(com.innovatiopr.payments.shared.domain.MoneyError.amountMustBePositive());
-        }
-        return Result.success(new PaymentTransaction(id, TransactionType.DEPOSIT, null, account, amount,
-                reference, TransactionStatus.PENDING, now, null, null));
+    public static PaymentTransaction initiateDeposit(TransactionId id, AccountId account, Money amount,
+                                                     TransactionReference reference, Instant now) {
+        requirePositive(amount);
+        return new PaymentTransaction(id, TransactionType.DEPOSIT, null, account, amount,
+                reference, TransactionStatus.PENDING, now, null, null);
     }
 
-    public static Result<PaymentTransaction> initiateWithdrawal(TransactionId id, AccountId account, Money amount,
-                                                                TransactionReference reference, Instant now) {
+    public static PaymentTransaction initiateWithdrawal(TransactionId id, AccountId account, Money amount,
+                                                        TransactionReference reference, Instant now) {
+        requirePositive(amount);
+        return new PaymentTransaction(id, TransactionType.WITHDRAWAL, account, null, amount,
+                reference, TransactionStatus.PENDING, now, null, null);
+    }
+
+    private static void requirePositive(Money amount) {
         if (!amount.isPositive()) {
-            return Result.failure(com.innovatiopr.payments.shared.domain.MoneyError.amountMustBePositive());
+            throw MoneyErrors.amountMustBePositive();
         }
-        return Result.success(new PaymentTransaction(id, TransactionType.WITHDRAWAL, account, null, amount,
-                reference, TransactionStatus.PENDING, now, null, null));
     }
 
     /** Rebuilds from storage: no validation, no events. */
@@ -97,9 +97,9 @@ public final class PaymentTransaction extends AggregateRoot<TransactionId> {
                 completedAt, failureCode);
     }
 
-    public Result<Void> complete(Instant now) {
+    public void complete(Instant now) {
         if (!status.canTransitionTo(TransactionStatus.COMPLETED)) {
-            return Result.failure(TransactionError.invalidTransition(id, status, TransactionStatus.COMPLETED));
+            throw TransactionErrors.invalidTransition(id, status, TransactionStatus.COMPLETED);
         }
         status = TransactionStatus.COMPLETED;
         completedAt = now;
@@ -112,12 +112,11 @@ public final class PaymentTransaction extends AggregateRoot<TransactionId> {
             case WITHDRAWAL -> new PaymentEvents.WithdrawalRecorded(UUID.randomUUID(), now, id.toString(),
                     String.valueOf(sourceAccountId), amount.amount(), amount.currency().getCurrencyCode());
         });
-        return Result.ok();
     }
 
-    public Result<Void> fail(String failureCode, Instant now) {
+    public void fail(String failureCode, Instant now) {
         if (!status.canTransitionTo(TransactionStatus.FAILED)) {
-            return Result.failure(TransactionError.invalidTransition(id, status, TransactionStatus.FAILED));
+            throw TransactionErrors.invalidTransition(id, status, TransactionStatus.FAILED);
         }
         status = TransactionStatus.FAILED;
         this.failureCode = failureCode;
@@ -127,7 +126,6 @@ public final class PaymentTransaction extends AggregateRoot<TransactionId> {
                     String.valueOf(sourceAccountId), String.valueOf(destinationAccountId), amount.amount(),
                     amount.currency().getCurrencyCode(), failureCode));
         }
-        return Result.ok();
     }
 
     @Override

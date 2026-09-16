@@ -4,8 +4,7 @@ import com.innovatiopr.payments.accounts.AccountId;
 import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.shared.domain.AggregateRoot;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.MoneyError;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.MoneyErrors;
 
 import java.time.Instant;
 import java.util.Currency;
@@ -82,12 +81,12 @@ public final class Account extends AggregateRoot<AccountId> {
      * <p>It also keeps the module graph acyclic: posting to the ledger from here would require
      * {@code accounts → ledger}, and Ledger already depends on Accounts for {@code AccountId}.
      */
-    public static Result<Account> open(AccountId id, CustomerId customerId, AccountNumber accountNumber,
-                                       Currency currency, Instant now) {
+    public static Account open(AccountId id, CustomerId customerId, AccountNumber accountNumber,
+                               Currency currency, Instant now) {
         Account account = new Account(id, customerId, accountNumber, currency, Money.zero(currency),
                 AccountStatus.ACTIVE, now, 0L);
         account.raise(AccountEvents.opened(id, customerId.toString(), accountNumber, currency, now));
-        return Result.success(account);
+        return account;
     }
 
     /**
@@ -101,104 +100,92 @@ public final class Account extends AggregateRoot<AccountId> {
     }
 
     /** Customer-initiated cash-in. */
-    public Result<Void> deposit(Money amount, Instant now) {
-        Result<Void> check = validateMovement(amount);
-        if (check.isFailure()) {
-            return check;
-        }
+    public void deposit(Money amount, Instant now) {
+        requireMovementAllowed(amount);
         balance = balance.add(amount);
         raise(AccountEvents.deposited(id, amount, balance, now));
-        return Result.ok();
     }
 
     /** Customer-initiated cash-out. */
-    public Result<Void> withdraw(Money amount, Instant now) {
-        Result<Void> check = validateMovement(amount);
-        if (check.isFailure()) {
-            return check;
-        }
-        if (balance.lessThan(amount)) {
-            return Result.failure(AccountError.insufficientFunds(id, amount, balance));
-        }
+    public void withdraw(Money amount, Instant now) {
+        requireMovementAllowed(amount);
+        requireSufficientFunds(amount);
         balance = balance.subtract(amount);
         raise(AccountEvents.withdrawn(id, amount, balance, now));
-        return Result.ok();
     }
 
     /** Removes money as one leg of an internal transfer. */
-    public Result<Void> debit(Money amount, Instant now) {
-        Result<Void> check = validateMovement(amount);
-        if (check.isFailure()) {
-            return check;
-        }
-        if (balance.lessThan(amount)) {
-            return Result.failure(AccountError.insufficientFunds(id, amount, balance));
-        }
+    public void debit(Money amount, Instant now) {
+        requireMovementAllowed(amount);
+        requireSufficientFunds(amount);
         balance = balance.subtract(amount);
         raise(AccountEvents.debited(id, amount, balance, now));
-        return Result.ok();
     }
 
     /** Adds money as one leg of an internal transfer. */
-    public Result<Void> credit(Money amount, Instant now) {
-        Result<Void> check = validateMovement(amount);
-        if (check.isFailure()) {
-            return check;
-        }
+    public void credit(Money amount, Instant now) {
+        requireMovementAllowed(amount);
         balance = balance.add(amount);
         raise(AccountEvents.credited(id, amount, balance, now));
-        return Result.ok();
     }
 
-    public Result<Void> freeze(Instant now) {
+    /**
+     * Freezing an already-frozen account is a no-op, not an error: the caller asked for a state and the
+     * account is in it. Only a transition that cannot be honoured throws.
+     */
+    public void freeze(Instant now) {
         if (status == AccountStatus.FROZEN) {
-            return Result.ok();
+            return;
         }
         if (status.isTerminal()) {
-            return Result.failure(new AccountError.InvalidStatusTransition(id, status, AccountStatus.FROZEN));
+            throw AccountErrors.invalidStatusTransition(id, status, AccountStatus.FROZEN);
         }
         status = AccountStatus.FROZEN;
         raise(AccountEvents.frozen(id, now));
-        return Result.ok();
     }
 
-    public Result<Void> unfreeze(Instant now) {
+    /** Idempotent in the same way as {@link #freeze(Instant)}. */
+    public void unfreeze(Instant now) {
         if (status == AccountStatus.ACTIVE) {
-            return Result.ok();
+            return;
         }
         if (status != AccountStatus.FROZEN) {
-            return Result.failure(new AccountError.InvalidStatusTransition(id, status, AccountStatus.ACTIVE));
+            throw AccountErrors.invalidStatusTransition(id, status, AccountStatus.ACTIVE);
         }
         status = AccountStatus.ACTIVE;
         raise(AccountEvents.unfrozen(id, now));
-        return Result.ok();
     }
 
-    public Result<Void> close(Instant now) {
+    /** Idempotent in the same way as {@link #freeze(Instant)}. */
+    public void close(Instant now) {
         if (status == AccountStatus.CLOSED) {
-            return Result.ok();
+            return;
         }
         if (!balance.isZero()) {
-            return Result.failure(new AccountError.NotEmpty(id, balance));
+            throw AccountErrors.notEmpty(id, balance);
         }
         status = AccountStatus.CLOSED;
         raise(AccountEvents.closed(id, now));
-        return Result.ok();
     }
 
     /** Shared guard for every balance-changing operation. */
-    private Result<Void> validateMovement(Money amount) {
+    private void requireMovementAllowed(Money amount) {
         Objects.requireNonNull(amount, "amount");
         if (!status.canTransact()) {
-            return Result.failure(AccountError.notTransactable(id, status));
+            throw AccountErrors.notTransactable(id, status);
         }
         if (!amount.currency().equals(currency)) {
-            return Result.failure(MoneyError.currencyMismatch(currency, amount.currency()));
+            throw MoneyErrors.currencyMismatch(currency, amount.currency());
         }
         if (!amount.isPositive()) {
-            return Result.failure(MoneyError.amountMustBePositive());
+            throw MoneyErrors.amountMustBePositive();
         }
-        return Result.ok();
+    }
+
+    private void requireSufficientFunds(Money amount) {
+        if (balance.lessThan(amount)) {
+            throw AccountErrors.insufficientFunds(id, amount, balance);
+        }
     }
 
     @Override

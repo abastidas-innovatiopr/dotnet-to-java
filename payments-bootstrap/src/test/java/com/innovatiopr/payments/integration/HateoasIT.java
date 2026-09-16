@@ -51,9 +51,9 @@ class HateoasIT extends AbstractIntegrationTest {
     @BeforeEach
     void openAnAccount() {
         client = RestTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
-        customer = customers.register("Edsger", "Dijkstra", "edsger@example.com").orElseThrow();
-        account = accounts.open(customer, "USD").orElseThrow();
-        payments.deposit(account, new BigDecimal("500.00"), "USD", "Opening deposit").orElseThrow();
+        customer = customers.register("Edsger", "Dijkstra", "edsger@example.com");
+        account = accounts.open(customer, "USD");
+        payments.deposit(account, new BigDecimal("500.00"), "USD", "Opening deposit");
     }
 
     private DocumentContext get(String uri, Object... args) {
@@ -106,7 +106,7 @@ class HateoasIT extends AbstractIntegrationTest {
                 .as("Account.close() refuses a non-zero balance, so the link must not be offered")
                 .doesNotContain("close");
 
-        payments.withdraw(account, new BigDecimal("500.00"), "USD", "Empty it").orElseThrow();
+        payments.withdraw(account, new BigDecimal("500.00"), "USD", "Empty it");
 
         assertThat(relations(get("/api/v1/accounts/{id}", account.value()))).contains("close");
     }
@@ -139,7 +139,7 @@ class HateoasIT extends AbstractIntegrationTest {
     @Test
     @DisplayName("a CLOSED account advertises no actions at all")
     void closed_account_links() {
-        payments.withdraw(account, new BigDecimal("500.00"), "USD", "Empty it").orElseThrow();
+        payments.withdraw(account, new BigDecimal("500.00"), "USD", "Empty it");
         var json = post("/api/v1/accounts/{id}/close", account.value());
 
         assertThat((String) json.read("$.status")).isEqualTo("CLOSED");
@@ -167,7 +167,7 @@ class HateoasIT extends AbstractIntegrationTest {
     @Test
     @DisplayName("a transfer response links to the transaction and both accounts")
     void transfer_resource_links() {
-        AccountId destination = accounts.open(customer, "USD").orElseThrow();
+        AccountId destination = accounts.open(customer, "USD");
 
         byte[] body = client.post().uri("/api/v1/transfers")
                 .header("Idempotency-Key", UUID.randomUUID().toString())

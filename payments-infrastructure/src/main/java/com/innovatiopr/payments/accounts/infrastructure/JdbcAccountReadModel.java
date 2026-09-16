@@ -7,7 +7,7 @@ import com.innovatiopr.payments.accounts.details.application.AccountReadModel;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
-import java.time.Instant;
+import java.time.Clock;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -22,9 +22,11 @@ import java.util.UUID;
 class JdbcAccountReadModel implements AccountReadModel {
 
     private final JdbcClient jdbc;
+    private final Clock clock;
 
-    JdbcAccountReadModel(JdbcClient jdbc) {
+    JdbcAccountReadModel(JdbcClient jdbc, Clock clock) {
         this.jdbc = jdbc;
+        this.clock = clock;
     }
 
     @Override
@@ -55,7 +57,9 @@ class JdbcAccountReadModel implements AccountReadModel {
                         rs.getString("currency"),
                         rs.getBigDecimal("balance"),
                         rs.getString("status"),
-                        Instant.now()))
+                        // The injected Clock, never Instant.now(): ambient time is unfixable in a test,
+                        // and this application's rule is that time is a dependency like any other.
+                        clock.instant()))
                 .optional();
     }
 }
