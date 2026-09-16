@@ -12,8 +12,7 @@ import com.innovatiopr.payments.payments.domain.TransactionId;
 import com.innovatiopr.payments.payments.domain.TransactionReference;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.MoneyError;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.MoneyErrors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,6 +40,11 @@ import java.util.Currency;
  * source balance, destination balance, payment transaction, ledger postings, idempotency record.
  * Domain events are published to Spring here but their listeners run <em>after</em> commit — see
  * {@code SpringDomainEventPublisher}.
+ *
+ * <p>Every failure below leaves this method as an exception, which is what makes "or not at all" true.
+ * An earlier version returned a failure value instead, and a {@code @Transactional} method that returns
+ * normally <em>commits</em> — so a ledger or completion failure after {@code postTransfer} had already
+ * staged both balance changes would persist moved money with no ledger rows and no transaction record.
  */
 @Service
 @Transactional
@@ -63,52 +67,36 @@ class TransferMoneyOperation {
         this.clock = clock;
     }
 
-    Result<TransferMoneyResult> execute(TransferMoneyCommand command) {
+    TransferMoneyResult execute(TransferMoneyCommand command) {
         Currency currency;
         try {
             currency = Currency.getInstance(command.currencyCode());
         } catch (IllegalArgumentException | NullPointerException e) {
-            return Result.failure(new MoneyError.UnknownCurrency(String.valueOf(command.currencyCode())));
+            throw MoneyErrors.unknownCurrency(String.valueOf(command.currencyCode()));
         }
 
         Money amount = Money.of(command.amount(), currency);
-        Result<TransactionReference> reference = TransactionReference.create(command.reference());
-        if (reference.isFailure()) {
-            return reference.propagate();
-        }
+        TransactionReference reference = TransactionReference.create(command.reference());
 
         Instant now = clock.instant();
         TransactionId transactionId = TransactionId.generate();
 
         // The aggregate rejects a same-account transfer before any lock is taken or money moves.
-        Result<PaymentTransaction> initiated = PaymentTransaction.initiateTransfer(transactionId,
-                command.sourceAccountId(), command.destinationAccountId(), amount, reference.orElseThrow(), now);
-        if (initiated.isFailure()) {
-            return initiated.propagate();
-        }
-        PaymentTransaction transaction = initiated.orElseThrow();
+        PaymentTransaction transaction = PaymentTransaction.initiateTransfer(transactionId,
+                command.sourceAccountId(), command.destinationAccountId(), amount, reference, now);
 
-        // Locks both accounts in ascending id order and enforces every Account invariant.
-        Result<TransferPostings> postings = accounts.postTransfer(command.sourceAccountId(),
+        // Locks both accounts in ascending id order and enforces every Account invariant. A refusal throws,
+        // and deliberately leaves no FAILED row: the whole transaction rolls back, so a rejected transfer
+        // leaves no trace beyond the API response. Persisting attempts would need its own transaction and
+        // is a separate concern from moving money.
+        TransferPostings postings = accounts.postTransfer(command.sourceAccountId(),
                 command.destinationAccountId(), amount);
-        if (postings.isFailure()) {
-            // Deliberately no FAILED row: the whole transaction rolls back, so a rejected transfer leaves
-            // no trace beyond the API response. Persisting attempts would need its own transaction and is a
-            // separate concern from moving money.
-            return postings.propagate();
-        }
 
-        Result<com.innovatiopr.payments.ledger.LedgerTransactionId> ledgerResult = ledger.recordTransfer(
+        ledger.recordTransfer(
                 PostingReference.of(transactionId.value()), command.sourceAccountId(),
-                command.destinationAccountId(), amount, reference.orElseThrow().value());
-        if (ledgerResult.isFailure()) {
-            return ledgerResult.propagate();
-        }
+                command.destinationAccountId(), amount, reference.value());
 
-        Result<Void> completed = transaction.complete(now);
-        if (completed.isFailure()) {
-            return completed.propagate();
-        }
+        transaction.complete(now);
         transactions.save(transaction);
 
         // Last, and inside the same transaction: the unique index on the key is what makes a retry safe.
@@ -119,11 +107,10 @@ class TransferMoneyOperation {
 
         events.publishFrom(transaction);
 
-        TransferPostings applied = postings.orElseThrow();
-        return Result.success(new TransferMoneyResult(transactionId.value(), command.sourceAccountId().value(),
+        return new TransferMoneyResult(transactionId.value(), command.sourceAccountId().value(),
                 command.destinationAccountId().value(), amount.amount(), currency.getCurrencyCode(),
-                transaction.status().name(), reference.orElseThrow().value(),
-                applied.source().balanceAfter().amount(), applied.destination().balanceAfter().amount(),
-                now, false));
+                transaction.status().name(), reference.value(),
+                postings.source().balanceAfter().amount(), postings.destination().balanceAfter().amount(),
+                now, false);
     }
 }

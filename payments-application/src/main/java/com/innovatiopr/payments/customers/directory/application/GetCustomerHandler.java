@@ -1,8 +1,7 @@
 package com.innovatiopr.payments.customers.directory.application;
 
-import com.innovatiopr.payments.customers.domain.CustomerError;
+import com.innovatiopr.payments.customers.domain.CustomerErrors;
 import com.innovatiopr.payments.shared.application.QueryHandler;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,9 +16,8 @@ public class GetCustomerHandler implements QueryHandler<GetCustomerQuery, Custom
 
     @Override
     @Transactional(readOnly = true)
-    public Result<CustomerDetails> handle(GetCustomerQuery query) {
+    public CustomerDetails handle(GetCustomerQuery query) {
         return customers.findById(query.customerId())
-                .map(Result::success)
-                .orElseGet(() -> Result.failure(CustomerError.notFound(query.customerId())));
+                .orElseThrow(() -> CustomerErrors.notFound(query.customerId()));
     }
 }

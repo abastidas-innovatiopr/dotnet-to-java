@@ -11,7 +11,7 @@ Java 25 (LTS) · Spring Boot 4.1.1 · Spring Framework 7 · Hibernate 7.4 · Pos
 Spring Modulith 2.1 · Spring HATEOAS 3.1 · Flyway 12 · JUnit 6 · Testcontainers 2
 ```
 
-**183 tests**: 121 unit (no Spring), 62 integration (real PostgreSQL).
+**187 tests**: 123 unit (no Spring), 64 integration (real PostgreSQL).
 
 ---
 
@@ -167,8 +167,9 @@ curl -s -X POST localhost:8080/api/v1/transfers \
 | .NET | Java / Spring | Notes |
 |---|---|---|
 | .NET 10 | **Java 25 (LTS)** | Records, sealed interfaces, pattern matching, virtual threads |
-| ASP.NET Core Minimal APIs | **`RouterFunction` / `HandlerFunction`** | See below — including what it costs |
-| `app.MapGet` / `app.MapPost` | `RouterFunctions.route().GET(…).POST(…)` | |
+| ASP.NET Core Minimal APIs | **`@RestController`** | See below — and why the literal equivalent was the wrong trade |
+| `app.MapGet` / `app.MapPost` | `@GetMapping` / `@PostMapping` | |
+| `MapGroup("/companies").WithTags(…)` | class-level `@RequestMapping` + `@Tag` | The grouping survives; it is just not an object |
 | `IServiceCollection` | `@Configuration` + `@Bean` | |
 | Built-in DI container | **Spring IoC container** | Constructor injection throughout |
 | Clean Architecture | Clean Architecture | Layers are **Maven modules**; the compiler enforces the dependency rule |
@@ -178,8 +179,10 @@ curl -s -X POST localhost:8080/api/v1/transfers \
 | Value Object | **Java `record`** | Immutable, structural equality, compact constructor validation |
 | Domain Events | Domain Events + **Spring Modulith** | With a persistent outbox |
 | Wolverine handler | **Typed `CommandHandler<C,R>` bean** | No mediator — endpoints inject the handler |
-| `ErrorOr<T>` | **`sealed interface Result<T>`** | `Success` \| `Failure`, exhaustive `switch` |
-| `Error.Validation()` / `.NotFound()` | `ErrorType.VALIDATION` / `.NOT_FOUND` | Domain classification, not HTTP |
+| `DomainException` | **`DomainException`** | Same name, same idea — failures are thrown, not returned |
+| `NotFoundException` / `ConflictException` | **same names**, in `shared.domain` | The type *is* the classification; see below |
+| `IndividualErrors.AlreadyClaimed(…)` | `AccountErrors.insufficientFunds(…)` | Per-context static factories pairing a code with its message |
+| `IExceptionHandler` / `GlobalExceptionHandler` | **`@RestControllerAdvice ApiExceptionHandler`** | One table, every status |
 | FluentValidation | **Jakarta Validation** (transport) + domain invariants | Deliberately separate — see below |
 | EF Core | **Hibernate / JPA** | |
 | `DbContext` | `EntityManager` + persistence context | |
@@ -200,7 +203,7 @@ curl -s -X POST localhost:8080/api/v1/transfers \
 | Testcontainers | **Testcontainers** | Same project |
 | Swashbuckle / OpenAPI | **springdoc-openapi** | |
 | Scalar | **Scalar** | Mounted by hand — see below |
-| NetArchTest | **ArchUnit** | 22 rules |
+| NetArchTest | **ArchUnit** | 27 rules |
 
 ---
 
@@ -228,9 +231,9 @@ Only constructor injection is used. Field injection (`@Autowired` on a field) ma
 invisible, prevents `final`, and stops you constructing the class in a unit test — an ArchUnit rule
 forbids it.
 
-### Functional endpoints
+### Annotated controllers
 
-The Minimal API equivalent, and the reason this codebase has no `@RestController`:
+The Minimal API equivalent:
 
 ```csharp
 // .NET
@@ -239,49 +242,51 @@ app.MapPost("/api/v1/transfers", TransferMoney);
 
 ```java
 // Spring
-@Bean
-RouterFunction<ServerResponse> transferRouterFunction(TransferEndpoint endpoint) {
-    return RouterFunctions.route()
-            .POST("/api/v1/transfers", endpoint::transfer)
-            .build();
+@RestController
+@RequestMapping(path = ApiPaths.TRANSFERS, produces = MediaTypes.HAL_JSON_VALUE)
+class TransferController {
+
+    @PostMapping
+    ResponseEntity<TransferResource> transfer(
+            @RequestHeader("Idempotency-Key") String rawKey,
+            @Valid @RequestBody TransferRequest body) { … }
 }
 ```
 
-- **`RouterFunction`** — a bean mapping requests to handlers. Spring composes every such bean.
-- **`HandlerFunction`** — `ServerRequest → ServerResponse`. Here, a method reference.
-- **`ServerRequest`** — `pathVariable()`, `param()`, `headers()`, `body(Class)`.
-- **`ServerResponse`** — a builder: `ok()`, `created(uri)`, `status(…)`.
+**This codebase used to route functionally**, with `RouterFunction` beans and `ServerRequest →
+ServerResponse` handler functions. It is the closer literal translation of Minimal APIs, and on paper it
+looks like the obvious choice for a .NET developer. In Java it is the wrong trade, and it is worth
+recording why, because the costs are rarely mentioned:
 
-**What it costs.** Three things stop working, and they are rarely mentioned:
+1. **`linkTo(methodOn(...))` is unavailable** — it reflects over an annotated controller method, and a
+   `RouterFunction` has none. Every hypermedia link had to be built from a constants class.
+2. **`@Valid` does nothing** — Bean Validation runs in the annotated-controller argument resolvers, so
+   with functional routing nothing inspects the annotations. They sat on the request records looking
+   authoritative and enforcing nothing, until a `RequestValidator` invoked the `Validator` by hand.
+3. **springdoc generates no paths** — it discovers controllers by reflection. This one is a *silent*
+   failure: the app runs, `/docs` returns 200, and the API reference is simply blank. The workaround was
+   `SpringdocRouteBuilder`, which meant hand-writing the operation id, summary, parameters, request body
+   and every response for all 16 routes.
 
-1. **`linkTo(methodOn(...))` is unavailable** — it reflects over an annotated controller method. Replaced
-   by an `ApiPaths` constants class. Arguably safer: a renamed path breaks compilation instead of
-   silently emitting a wrong link.
-2. **`@Valid` does nothing** — Bean Validation is run by the annotated-controller argument resolvers, so
-   nothing inspects the annotations. `RequestValidator` invokes it explicitly.
-3. **springdoc generates no paths** — it discovers controllers by reflection, and a `RouterFunction` is an
-   opaque runtime object. This one is a *silent* failure: the app runs, `/docs` returns 200, and the API
-   reference is simply blank. The fix is `SpringdocRouteBuilder`, a drop-in replacement that takes an
-   operation builder per route:
+Each has a workaround, and the workarounds worked. But they added three mechanisms whose only purpose was
+to restore behaviour that annotated controllers give for free, and a reader had to learn all three before
+reading an endpoint. Choose functional routing because you want explicit routing tables, not because you
+expect it to be free.
 
-   ```java
-   SpringdocRouteBuilder.route()
-           .POST(ApiPaths.TRANSFERS, endpoint::transfer, ops -> ops
-                   .operationId("transferMoney")
-                   .summary("Transfer money between two accounts")
-                   .parameter(OpenApiDocs.idempotencyKeyHeader())
-                   .requestBody(requestBodyBuilder().implementation(TransferRequest.class))
-                   .response(OpenApiDocs.hal("201", "Transfer completed."))
-                   .response(OpenApiDocs.problem("422", "A domain rule refused the transfer.")))
-           .build();
-   ```
+**What the move back cost.** One thing, and it is not the one you would guess:
 
-   Documentation lives in the same call as the route, so the two cannot drift — delete a route and its
-   docs go with it. `OpenApiDocumentIT` then asserts that all 16 operations are present, so a route added
-   with the wrong builder fails the build instead of quietly shrinking the docs.
+- **`linkTo(methodOn(...))` still cannot cross a Spring Modulith boundary.** `AccountResourceAssembler`
+  emits links into `customers`, `payments` and `ledger`; naming those controllers would import another
+  module's internal package, and `ModularityTest` fails the build on it. Since some links cannot use the
+  reflective builder, all of them use `ApiPaths` instead — one mechanism that always works beats two that
+  each work half the time and leave the reader deciding which applies.
 
-All three are solvable, and all three are real. Choose functional routing because you want explicit
-routing tables, not because you expect it to be free.
+`@Valid` and springdoc generation both came back, so `RequestValidator` is gone, the per-route operation
+builders are gone, and the only `RouterFunction` left in the codebase is the two-route static mount that
+serves the Scalar UI — which is what `RouterFunctions.route()` is genuinely good at.
+
+One more thing the move unlocked: `@WebMvcTest(TransferController.class)` with `MockMvcTester`, a fast
+controller test with no database at all. That was simply impossible with functional routing.
 
 ### Spring HATEOAS
 
@@ -350,37 +355,50 @@ public record Money(BigDecimal amount, Currency currency) {
 }
 ```
 
-**Sealed interfaces** — closed hierarchies, so `switch` is exhaustive without a `default`:
+**Sealed interfaces and exhaustive `switch`** — a closed hierarchy means `switch` needs no `default`:
 
 ```java
-return switch (result) {
-    case Result.Success<T>(T value) -> onSuccess.apply(value);   // record pattern
-    case Result.Failure<T> failure  -> onFailure.apply(failure.errors());
+return switch (status) {                                  // AccountStatus is an enum, also exhaustive
+    case FROZEN -> new DomainException("ACCOUNT_FROZEN", …);
+    case CLOSED -> new DomainException("ACCOUNT_CLOSED", …);
+    case ACTIVE -> new DomainException("ACCOUNT_NOT_ACTIVE", …);
 };
 ```
 
 A `default` branch would silently swallow a new case; exhaustiveness makes adding one a compile error at
-every site that must handle it.
+every site that must handle it. `PaymentEvents` uses the same property over `TransactionType`.
 
 ---
 
 ## Where this design pushed back on the brief
 
-Eight decisions differ from the specification. Each was forced by the compiler, the framework, or a
+Nine decisions differ from the specification. Each was forced by the compiler, the framework, or a
 correctness bug found while running the thing.
 
-### 1. `sealed interface DomainError` does not compile
+### 1. Failures are exceptions, and `DomainException` is a 422
 
-The brief asked for `sealed interface DomainError permits AccountError, MoneyError, …`. The JLS requires
-permitted subtypes to share a package (or a named JPMS module), and our errors live in separate bounded
-contexts:
+The brief asked for `ErrorOr<T>`, which arrived here as a `sealed interface Result<T>`. It worked, and it
+was wrong in a way that took a test to see: **a `@Transactional` method that returns a failure commits.**
+`TransferMoneyOperation` stages both balance changes in `postTransfer` and only then writes the ledger, so
+a ledger failure returned rather than thrown persisted the moved money with no ledger rows and no
+transaction to explain it — in an application whose entire purpose is an auditable ledger. Throwing hands
+Spring the rollback; `TransferRollbackIT` is the regression guard, and it fails loudly on the old
+behaviour.
 
-```
-error: class DomainError in unnamed module cannot extend a sealed class in a different package
-```
+Two smaller decisions came with it:
 
-**Resolution:** a plain root interface; each module seals its own hierarchy. Exhaustiveness is preserved
-where it is useful (inside a module) and the boundaries survive.
+- **The exception type is the classification.** `ValidationException` → 400, `NotFoundException` → 404,
+  `ConflictException` → 409, `DomainException` → 422. The old `ErrorType` enum was a second classification
+  that could disagree with the class carrying it, so it is gone — but the stable `code` string survives on
+  every exception, because clients branch on it.
+- **`DomainException` maps to 422, not the reference's 400.** Insufficient funds is not a malformed
+  request; there is nothing for the client to fix. Telling it otherwise would be a lie, so this is a
+  deliberate deviation from `ddec-platform-api`, and the only one in the error model.
+
+The exceptions live in `payments-domain` rather than in the application layer, which is where the .NET
+reference puts them. They have to: the published module contracts (`AccountsApi`, `CustomersApi`, …) are
+declared in the domain module and name these types in their `@throws` clauses. They stay plain Java — no
+Spring, no Jakarta — so the domain-purity rules hold unchanged.
 
 ### 2. Accounts cannot open with a balance
 
@@ -411,9 +429,12 @@ terms and Payments translates at the boundary.
 ### 5. Functional routes documented themselves as nothing
 
 The first OpenAPI document had **zero paths**, so Scalar rendered an empty reference — and nothing
-failed. Fixed with `SpringdocRouteBuilder` across all ten route classes, and locked down by
-`OpenApiDocumentIT`, which asserts every operation, its `operationId`, summary, tag, responses and
-request schema.
+failed. It was patched with `SpringdocRouteBuilder` across all ten route classes and then fixed properly
+by moving to annotated controllers, which springdoc discovers by reflection.
+
+`OpenApiDocumentIT` stayed either way, and grew: it now asserts every operation's exact `operationId`,
+not merely that one is present. springdoc will happily invent `getById_1` from a method name, so
+"is it documented?" would have stayed green while every generated client broke.
 
 ### 6. The Scalar starter does not work on Spring Boot 4
 
@@ -423,7 +444,9 @@ evaluated** — the condition report shows no match at all and `/scalar` returns
 correct in the POM and silently produced no docs UI.
 
 **Resolution:** depend on `scalar-core` only and mount the UI through a `RouterFunction`. Its ~3.7 MB
-bundle is served from the jar, so the docs work with no network at all.
+bundle is served from the jar, so the docs work with no network at all. This is now the only
+`RouterFunction` in the codebase, and deliberately so: `/docs` serves an HTML page and a static asset,
+with no body, no validation and no hypermedia, and it must *not* be discovered by springdoc.
 
 ### 7. Two levels of domain event, deliberately
 
@@ -436,6 +459,18 @@ withdrawals.
 It is on a separate bean it calls. A duplicate-key violation leaves the PostgreSQL transaction aborted,
 so the retry lookup must happen after that transaction unwinds — which is only possible if the boundary
 sits on a different bean.
+
+### 9. Annotated controllers, not functional routes
+
+The brief asked for the literal Minimal API equivalent, and `RouterFunction` is exactly that. It cost
+three mechanisms that existed only to restore what `@RestController` gives for free — a constants class
+standing in for `linkTo(methodOn(...))`, a `RequestValidator` invoking Bean Validation by hand because
+`@Valid` was inert, and a hand-written OpenAPI operation for all 16 routes because springdoc saw nothing.
+
+**Resolution:** annotated controllers, one per vertical slice. `@Valid` and springdoc generation both
+came back. `ApiPaths` stayed — not as a workaround, but because `linkTo(methodOn(...))` still cannot name
+a controller in another Spring Modulith module without failing `ModularityTest`, and one link mechanism
+that always works beats two that each work half the time.
 
 ---
 
@@ -462,12 +497,12 @@ against a classpath that has no framework on it.
 
 | Module | Tools | Spring? | Count |
 |---|---|---|---|
-| `payments-domain` — aggregates, `Money`, `Result` | JUnit 6, AssertJ | No | 64 |
+| `payments-domain` — aggregates, `Money`, exceptions | JUnit 6, AssertJ | No | 54 |
 | `payments-application` — handlers, pagination | + Mockito | No | 26 |
 | `payments-infrastructure` — sort allow-list | JUnit 6, AssertJ | No | 5 |
-| `payments-bootstrap` — ArchUnit, Modulith, POM isolation | ArchUnit, Spring Modulith | No | 26 |
-| `payments-bootstrap` — the whole stack | Testcontainers PostgreSQL | Yes | 62 |
-| **Total** | | | **183** |
+| `payments-bootstrap` — ArchUnit, Modulith, POM isolation | ArchUnit, Spring Modulith | No | 38 |
+| `payments-bootstrap` — the whole stack | Testcontainers PostgreSQL | Yes | 64 |
+| **Total** | | | **187** |
 
 **Domain tests run without Spring** — no context, no database, milliseconds. That is the practical payoff
 of keeping the model framework-free, and it is why there can be a lot of them.
@@ -520,8 +555,13 @@ Financial payloads are never logged in full.
 
 ## Further reading
 
+- **[ENGINEERING_RULES.md](ENGINEERING_RULES.md)** — the normative rules a change must satisfy to be
+  accepted, numbered so a PR comment can cite one. Ported from `ddec-platform-api` so a reviewer who knows
+  that repository can review this one. Read this before opening a PR.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — bounded contexts, aggregates, value objects, errors,
   events, module graph, repositories, package layout, routes, hypermedia, pagination, persistence,
   transactions, and the dependency diagram.
+- **[docs/API.md](docs/API.md)** — the HTTP contract: every endpoint, the pagination and idempotency
+  conventions, and the problem-document shape.
 - **`target/spring-modulith-docs/`** — C4 component diagrams and per-module canvases, generated from the
   code by `ModularityTest`, so they cannot drift.

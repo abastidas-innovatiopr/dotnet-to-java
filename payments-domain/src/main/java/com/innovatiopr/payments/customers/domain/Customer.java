@@ -2,7 +2,6 @@ package com.innovatiopr.payments.customers.domain;
 
 import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.shared.domain.AggregateRoot;
-import com.innovatiopr.payments.shared.domain.Result;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -31,21 +30,19 @@ public final class Customer extends AggregateRoot<CustomerId> {
     }
 
     /**
-     * Registers a new customer. Returns a {@link Result} rather than throwing, because invalid input is an
-     * expected outcome of a public API, not a bug.
+     * Registers a new customer. Invalid input throws a
+     * {@link com.innovatiopr.payments.shared.domain.ValidationException} carrying the offending field's
+     * code — the value objects refuse to be constructed, so an invalid {@code Customer} cannot exist.
      */
-    public static Result<Customer> register(CustomerId id, String firstName, String lastName, String email, Instant now) {
-        Result<PersonName> name = PersonName.create(firstName, lastName);
-        if (name.isFailure()) {
-            return name.propagate();
-        }
-        Result<EmailAddress> address = EmailAddress.create(email);
-        if (address.isFailure()) {
-            return address.propagate();
-        }
-        Customer customer = new Customer(id, name.orElseThrow(), address.orElseThrow(), now, 0L);
+    public static Customer register(CustomerId id, String firstName, String lastName, String email, Instant now) {
+        Customer customer = new Customer(
+                id,
+                PersonName.create(firstName, lastName),
+                EmailAddress.create(email),
+                now,
+                0L);
         customer.raise(CustomerRegistered.of(customer, now));
-        return Result.success(customer);
+        return customer;
     }
 
     /**
@@ -56,13 +53,8 @@ public final class Customer extends AggregateRoot<CustomerId> {
         return new Customer(id, name, email, registeredAt, version);
     }
 
-    public Result<Void> changeEmail(String newEmail) {
-        Result<EmailAddress> address = EmailAddress.create(newEmail);
-        if (address.isFailure()) {
-            return address.propagate();
-        }
-        this.email = address.orElseThrow();
-        return Result.ok();
+    public void changeEmail(String newEmail) {
+        this.email = EmailAddress.create(newEmail);
     }
 
     @Override

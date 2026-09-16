@@ -1,7 +1,5 @@
 package com.innovatiopr.payments.customers.domain;
 
-import com.innovatiopr.payments.shared.domain.Result;
-
 import java.util.Locale;
 import java.util.Objects;
 import java.util.regex.Pattern;
@@ -22,18 +20,18 @@ public record EmailAddress(String value) {
         Objects.requireNonNull(value, "value");
     }
 
-    public static Result<EmailAddress> create(String raw) {
+    public static EmailAddress create(String raw) {
         if (raw == null || raw.isBlank()) {
-            return Result.failure(CustomerError.invalidEmail("Email address is required"));
+            throw CustomerErrors.invalidEmail("Email address is required");
         }
         String normalised = raw.trim().toLowerCase(Locale.ROOT);
         if (normalised.length() > MAX_LENGTH) {
-            return Result.failure(CustomerError.invalidEmail("Email address exceeds " + MAX_LENGTH + " characters"));
+            throw CustomerErrors.invalidEmail("Email address exceeds " + MAX_LENGTH + " characters");
         }
         if (!PATTERN.matcher(normalised).matches()) {
-            return Result.failure(CustomerError.invalidEmail("'" + raw + "' is not a valid email address"));
+            throw CustomerErrors.invalidEmail("'" + raw + "' is not a valid email address");
         }
-        return Result.success(new EmailAddress(normalised));
+        return new EmailAddress(normalised);
     }
 
     /** Rehydration from storage, where the value is known to have been validated already. */

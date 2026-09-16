@@ -61,21 +61,49 @@ A retried HTTP request never moves money twice, including when retries arrive co
 
 ### Errors
 
+Every failure is an RFC 9457 problem document, sent as `application/problem+json`.
+
 ```json
 {
   "type": "https://api.payments.local/problems/account_insufficient_funds",
   "title": "Business rule violated",
   "status": 422,
   "detail": "Account 9f3a… has 120.00 USD available but 250.00 USD was requested",
+  "instance": "/api/v1/transfers",
   "code": "ACCOUNT_INSUFFICIENT_FUNDS",
-  "errors": [{ "code": "ACCOUNT_INSUFFICIENT_FUNDS", "message": "…", "type": "BUSINESS_RULE" }],
   "correlationId": "4f2c…",
   "traceId": "1a9b…"
 }
 ```
 
-`code` is stable and safe to branch on. `400` malformed request · `404` not found · `409` conflict ·
-`422` domain rule violated · `500` unexpected.
+`code` is stable and safe to branch on — `detail` is for humans and may be reworded at any time.
+
+| Status | Meaning |
+|---|---|
+| `400` | Malformed request: an invalid body, a path variable that is not a UUID, or a value the domain refuses outright |
+| `403` | Authenticated but not permitted *(reserved; nothing returns it yet)* |
+| `404` | No such resource |
+| `409` | Conflicts with existing state — a duplicate, or a reused idempotency key |
+| `422` | Well formed and understood, but a domain rule forbids it. Insufficient funds is the canonical case: there is nothing wrong with the request, so there is nothing for the client to fix |
+| `500` | Unexpected. The detail goes to the log, correlated by id, never to the client |
+| `504` | A downstream query timed out; the request may succeed if retried |
+
+**The `errors` array appears only for body validation**, where a request can fail in several places at
+once. It lists one entry per offending field, sorted by field name:
+
+```json
+{
+  "type": "https://api.payments.local/problems/validation-failed",
+  "title": "Validation failed",
+  "status": 400,
+  "code": "REQUEST_VALIDATION_FAILED",
+  "errors": [
+    { "field": "email", "message": "Email must be a valid address" },
+    { "field": "firstName", "message": "First name is required" }
+  ],
+  "correlationId": "4f2c…"
+}
+```
 
 `X-Correlation-Id` is accepted on any request and echoed on the response.
 

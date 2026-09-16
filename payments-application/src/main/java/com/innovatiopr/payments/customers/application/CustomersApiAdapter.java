@@ -2,11 +2,10 @@ package com.innovatiopr.payments.customers.application;
 
 import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.customers.CustomersApi;
-import com.innovatiopr.payments.customers.domain.CustomerError;
+import com.innovatiopr.payments.customers.domain.CustomerErrors;
 import com.innovatiopr.payments.customers.registration.application.CreateCustomerCommand;
 import com.innovatiopr.payments.customers.registration.application.CreateCustomerHandler;
 import com.innovatiopr.payments.customers.registration.application.CreateCustomerResult;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,16 +28,16 @@ class CustomersApiAdapter implements CustomersApi {
 
     @Override
     @Transactional(readOnly = true)
-    public Result<Void> requireExists(CustomerId customerId) {
-        return customers.existsById(customerId)
-                ? Result.ok()
-                : Result.failure(CustomerError.notFound(customerId));
+    public void requireExists(CustomerId customerId) {
+        if (!customers.existsById(customerId)) {
+            throw CustomerErrors.notFound(customerId);
+        }
     }
 
     @Override
-    public Result<CustomerId> register(String firstName, String lastName, String email) {
-        Result<CreateCustomerResult> created = createCustomer.handle(
+    public CustomerId register(String firstName, String lastName, String email) {
+        CreateCustomerResult created = createCustomer.handle(
                 new CreateCustomerCommand(firstName, lastName, email));
-        return created.map(result -> CustomerId.of(result.customerId()));
+        return CustomerId.of(created.customerId());
     }
 }

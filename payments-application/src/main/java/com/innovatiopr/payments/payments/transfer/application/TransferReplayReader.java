@@ -5,8 +5,7 @@ import com.innovatiopr.payments.payments.application.PaymentTransactionRepositor
 import com.innovatiopr.payments.payments.domain.IdempotencyKey;
 import com.innovatiopr.payments.payments.domain.IdempotencyRecord;
 import com.innovatiopr.payments.payments.domain.PaymentTransaction;
-import com.innovatiopr.payments.payments.domain.TransferError;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.payments.domain.TransferErrors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,22 +40,19 @@ class TransferReplayReader {
         return idempotency.find(key);
     }
 
-    /** Rebuilds the original response, or reports that the key was reused for a different request. */
+    /** Rebuilds the original response, or refuses because the key was reused for a different request. */
     @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
-    Result<TransferMoneyResult> replay(IdempotencyRecord record, String requestHash) {
+    TransferMoneyResult replay(IdempotencyRecord record, String requestHash) {
         if (!record.matches(requestHash)) {
-            return Result.failure(TransferError.idempotencyKeyReused(record.key().value()));
+            throw TransferErrors.idempotencyKeyReused(record.key().value());
         }
 
-        Optional<PaymentTransaction> original = transactions.findById(record.transactionId());
-        if (original.isEmpty()) {
-            // The record and the transaction commit together, so this is unreachable without data loss.
-            throw new IllegalStateException("Idempotency record " + record.key()
-                    + " references missing transaction " + record.transactionId());
-        }
+        PaymentTransaction transaction = transactions.findById(record.transactionId())
+                // The record and the transaction commit together, so this is unreachable without data loss.
+                .orElseThrow(() -> new IllegalStateException("Idempotency record " + record.key()
+                        + " references missing transaction " + record.transactionId()));
 
-        PaymentTransaction transaction = original.get();
-        return Result.success(new TransferMoneyResult(
+        return new TransferMoneyResult(
                 transaction.id().value(),
                 transaction.sourceAccountId().map(id -> id.value()).orElse(null),
                 transaction.destinationAccountId().map(id -> id.value()).orElse(null),
@@ -67,6 +63,6 @@ class TransferReplayReader {
                 null,
                 null,
                 transaction.completedAt().orElse(transaction.createdAt()),
-                true));
+                true);
     }
 }

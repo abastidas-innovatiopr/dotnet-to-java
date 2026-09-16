@@ -5,7 +5,6 @@ import com.innovatiopr.payments.ledger.LedgerTransactionId;
 import com.innovatiopr.payments.ledger.PostingReference;
 import com.innovatiopr.payments.shared.domain.AggregateRoot;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.Result;
 
 import java.time.Instant;
 import java.util.Currency;
@@ -46,56 +45,56 @@ public final class LedgerTransaction extends AggregateRoot<LedgerTransactionId> 
     }
 
     /** Two internal accounts: money leaves one and arrives at the other. */
-    public static Result<LedgerTransaction> recordTransfer(PostingReference reference, AccountId source,
-                                                           AccountId destination, Money amount,
-                                                           String description, Instant now) {
+    public static LedgerTransaction recordTransfer(PostingReference reference, AccountId source,
+                                                   AccountId destination, Money amount,
+                                                   String description, Instant now) {
         return create(reference, List.of(
                 LedgerEntry.debit(LedgerAccountRef.internal(source), amount),
                 LedgerEntry.credit(LedgerAccountRef.internal(destination), amount)), description, now);
     }
 
     /** Cash in: the customer account is credited, the settlement position is debited. */
-    public static Result<LedgerTransaction> recordDeposit(PostingReference reference, AccountId account,
-                                                          Money amount, String description, Instant now) {
+    public static LedgerTransaction recordDeposit(PostingReference reference, AccountId account,
+                                                  Money amount, String description, Instant now) {
         return create(reference, List.of(
                 LedgerEntry.debit(LedgerAccountRef.externalSettlement(), amount),
                 LedgerEntry.credit(LedgerAccountRef.internal(account), amount)), description, now);
     }
 
     /** Cash out: the customer account is debited, the settlement position is credited. */
-    public static Result<LedgerTransaction> recordWithdrawal(PostingReference reference, AccountId account,
-                                                             Money amount, String description, Instant now) {
+    public static LedgerTransaction recordWithdrawal(PostingReference reference, AccountId account,
+                                                     Money amount, String description, Instant now) {
         return create(reference, List.of(
                 LedgerEntry.debit(LedgerAccountRef.internal(account), amount),
                 LedgerEntry.credit(LedgerAccountRef.externalSettlement(), amount)), description, now);
     }
 
-    private static Result<LedgerTransaction> create(PostingReference reference, List<LedgerEntry> entries,
-                                                    String description, Instant now) {
+    private static LedgerTransaction create(PostingReference reference, List<LedgerEntry> entries,
+                                            String description, Instant now) {
         Objects.requireNonNull(reference, "reference");
         Objects.requireNonNull(entries, "entries");
 
         if (entries.size() < 2) {
-            return Result.failure(new LedgerError.TooFewEntries(entries.size()));
+            throw LedgerErrors.tooFewEntries(entries.size());
         }
 
         Currency currency = entries.getFirst().amount().currency();
         boolean mixed = entries.stream().anyMatch(entry -> !entry.amount().currency().equals(currency));
         if (mixed) {
-            return Result.failure(new LedgerError.MixedCurrencies());
+            throw LedgerErrors.mixedCurrencies();
         }
 
         Money debits = sum(entries, EntryDirection.DEBIT, currency);
         Money credits = sum(entries, EntryDirection.CREDIT, currency);
         if (!debits.equals(credits)) {
-            return Result.failure(new LedgerError.Unbalanced(debits, credits));
+            throw LedgerErrors.unbalanced(debits, credits);
         }
 
         LedgerTransaction transaction = new LedgerTransaction(
                 LedgerTransactionId.generate(), reference, entries, description, now);
         transaction.raise(LedgerTransactionRecorded.of(transaction.id, reference, debits.amount(),
                 currency.getCurrencyCode(), entries.size(), now));
-        return Result.success(transaction);
+        return transaction;
     }
 
     /** Rebuilds from storage: no validation, no events. */

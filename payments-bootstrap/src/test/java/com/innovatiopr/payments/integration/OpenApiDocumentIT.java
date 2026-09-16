@@ -20,16 +20,36 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Guards the generated OpenAPI document.
  *
  * <h2>Why this test exists</h2>
- * springdoc discovers annotated controllers by reflection, and a {@code RouterFunction} is an opaque
- * runtime object. With plain {@code RouterFunctions.route()} the document generated **zero paths** and
- * Scalar rendered an empty API reference — a silent failure: the application worked, the docs endpoint
- * returned 200, and the page was simply blank.
+ * The failure it guards against is a silent one. An earlier version of this API served its routes
+ * functionally, springdoc could not see them, and the generated document contained <em>zero paths</em>:
+ * the application worked, the docs endpoint returned 200, and the reference page was simply blank.
  *
- * <p>{@code SpringdocRouteBuilder} fixes it by taking documentation in the same call as the route. This
- * test makes the fix permanent: add a route with the wrong builder and the build fails rather than the
- * documentation quietly shrinking.
+ * <p>Annotated controllers make that particular failure impossible, but they introduce a subtler one.
+ * springdoc will happily <em>invent</em> an {@code operationId} from the Java method name, so renaming a
+ * method — or forgetting {@code @Operation} on a new one — silently renames the operation and breaks every
+ * generated client, while every "is it documented?" assertion stays green. That is why the expected ids
+ * are written out below and asserted exactly, rather than merely checked for being non-null.
  */
 class OpenApiDocumentIT extends AbstractIntegrationTest {
+
+    /** Every route the application serves under /api/v1, mapped to its published operation id. */
+    private static final Map<String, String> EXPECTED_OPERATION_IDS = Map.ofEntries(
+            Map.entry("post /api/v1/customers", "createCustomer"),
+            Map.entry("get /api/v1/customers", "listCustomers"),
+            Map.entry("get /api/v1/customers/{customerId}", "getCustomer"),
+            Map.entry("post /api/v1/accounts", "openAccount"),
+            Map.entry("get /api/v1/accounts/{accountId}", "getAccount"),
+            Map.entry("get /api/v1/accounts/{accountId}/balance", "getAccountBalance"),
+            Map.entry("post /api/v1/accounts/{accountId}/freeze", "freezeAccount"),
+            Map.entry("post /api/v1/accounts/{accountId}/unfreeze", "unfreezeAccount"),
+            Map.entry("post /api/v1/accounts/{accountId}/close", "closeAccount"),
+            Map.entry("post /api/v1/accounts/{accountId}/deposits", "depositMoney"),
+            Map.entry("post /api/v1/accounts/{accountId}/withdrawals", "withdrawMoney"),
+            Map.entry("get /api/v1/accounts/{accountId}/transactions", "listAccountTransactions"),
+            Map.entry("get /api/v1/accounts/{accountId}/statement", "getAccountStatement"),
+            Map.entry("post /api/v1/transfers", "transferMoney"),
+            Map.entry("get /api/v1/transactions", "listTransactions"),
+            Map.entry("get /api/v1/transactions/{transactionId}", "getTransaction"));
 
     /** Every route the application serves under /api/v1. */
     private static final List<String> EXPECTED_OPERATIONS = List.of(
@@ -66,7 +86,7 @@ class OpenApiDocumentIT extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("every functional route appears in the OpenAPI document")
+    @DisplayName("every route appears in the OpenAPI document")
     void documents_every_route() {
         Map<String, Map<String, Object>> paths = apiDocs.read("$.paths");
 
@@ -89,16 +109,43 @@ class OpenApiDocumentIT extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("every operation carries an id, a summary and a tag")
+    @DisplayName("every operation carries its published id, a summary and a tag")
     void every_operation_is_described() {
         Map<String, Map<String, Map<String, Object>>> paths = apiDocs.read("$.paths");
 
         paths.forEach((path, methods) -> methods.forEach((method, operation) -> {
-            String where = method.toUpperCase() + " " + path;
-            assertThat(operation.get("operationId")).as("operationId for " + where).isNotNull();
+            String where = method + " " + path;
+            // Asserted against the expected value, not merely for being present: springdoc derives an id
+            // from the method name when @Operation omits one, so "not null" would pass for getById_1.
+            assertThat(operation.get("operationId"))
+                    .as("operationId for " + where.toUpperCase())
+                    .isEqualTo(EXPECTED_OPERATION_IDS.get(where));
             assertThat(operation.get("summary")).as("summary for " + where).isNotNull();
             assertThat((List<?>) operation.get("tags")).as("tags for " + where).isNotEmpty();
             assertThat((Map<?, ?>) operation.get("responses")).as("responses for " + where).isNotEmpty();
+        }));
+    }
+
+    @Test
+    @DisplayName("failures are documented as problem+json, not as the success media type")
+    void failure_responses_document_the_problem_media_type() {
+        Map<String, Map<String, Map<String, Object>>> paths = apiDocs.read("$.paths");
+
+        paths.forEach((path, methods) -> methods.forEach((method, operation) -> {
+            @SuppressWarnings("unchecked")
+            Map<String, Map<String, Object>> responses =
+                    (Map<String, Map<String, Object>>) operation.get("responses");
+
+            responses.forEach((status, response) -> {
+                if (!status.startsWith("4") && !status.startsWith("5")) {
+                    return;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> content = (Map<String, Object>) response.get("content");
+                assertThat(content)
+                        .as("media type of %s on %s %s", status, method.toUpperCase(), path)
+                        .containsOnlyKeys("application/problem+json");
+            });
         }));
     }
 

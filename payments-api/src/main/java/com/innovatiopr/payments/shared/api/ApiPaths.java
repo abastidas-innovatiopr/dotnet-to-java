@@ -1,23 +1,24 @@
 package com.innovatiopr.payments.shared.api;
 
-import org.springframework.web.servlet.function.ServerRequest;
-import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.util.UUID;
 
 /**
- * Every URI this API exposes, in one place.
+ * Every URI this API exposes, in one place. The constants are the {@code @RequestMapping} values on the
+ * controllers and the source of every hypermedia link, so a path exists exactly once in the codebase.
  *
  * <h2>Why not {@code linkTo(methodOn(...))}</h2>
- * Spring HATEOAS's most familiar link builder reflects over an annotated {@code @RestController} method to
- * discover its mapping. With functional routing there is no annotated method to point at, so that
- * technique is simply unavailable — a real and under-documented trade-off of choosing {@code RouterFunction}
- * over {@code @RestController}.
+ * Spring HATEOAS's familiar reflective builder <em>is</em> available now that the endpoints are annotated
+ * controllers — but only for links that stay inside one module. {@code AccountResourceAssembler} emits
+ * links into {@code customers}, {@code payments} and {@code ledger}, and naming those controllers would
+ * import another module's internal package: legal Java that {@code ModularityTest} fails the build on,
+ * and rightly, since it is exactly the coupling the module boundaries exist to prevent.
  *
- * <p>The replacement is this class: path templates declared once and used by both the routes and the
- * assemblers. It is arguably safer than the reflective builder, since a renamed path breaks compilation
- * in one place rather than silently producing a wrong link at runtime — but it is a deliberate substitute,
- * not an accident.
+ * <p>Since some links cannot use the reflective builder, all of them use this class instead. One
+ * mechanism that always works beats two that each work half the time and leave the reader deciding which
+ * applies. It also fails earlier: a renamed path breaks compilation here rather than silently producing a
+ * wrong link at runtime.
  */
 public final class ApiPaths {
 
@@ -44,14 +45,14 @@ public final class ApiPaths {
     private ApiPaths() {
     }
 
-    /** Scheme, host and port of the current request — links are absolute so clients can follow them blindly. */
-    public static String baseUrl(ServerRequest request) {
-        return UriComponentsBuilder.fromUri(request.uri())
-                .replacePath(null)
-                .replaceQuery(null)
-                .fragment(null)
-                .build()
-                .toUriString();
+    /**
+     * Scheme, host and port of the current request — links are absolute so clients can follow them blindly.
+     *
+     * <p>Reads the request from {@code RequestContextHolder} rather than taking it as a parameter, which
+     * keeps the assemblers free of transport types. Only callable on a request-handling thread.
+     */
+    public static String baseUrl() {
+        return ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
     }
 
     public static String customer(String baseUrl, UUID customerId) {

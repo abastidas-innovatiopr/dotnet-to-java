@@ -3,7 +3,6 @@ package com.innovatiopr.payments.payments.transactions.application;
 import com.innovatiopr.payments.accounts.AccountsApi;
 import com.innovatiopr.payments.shared.application.PageResult;
 import com.innovatiopr.payments.shared.application.QueryHandler;
-import com.innovatiopr.payments.shared.domain.Result;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,11 +26,8 @@ public class GetAccountTransactionsHandler
 
     @Override
     @Transactional(readOnly = true)
-    public Result<PageResult<TransactionDetails>> handle(TransactionQueries.GetAccountTransactionsQuery query) {
-        Result<Void> accountExists = accounts.requireExists(query.accountId());
-        if (accountExists.isFailure()) {
-            return accountExists.propagate();
-        }
-        return Result.success(transactions.findByAccount(query.accountId(), query.filter(), query.page()));
+    public PageResult<TransactionDetails> handle(TransactionQueries.GetAccountTransactionsQuery query) {
+        accounts.requireExists(query.accountId());
+        return transactions.findByAccount(query.accountId(), query.filter(), query.page());
     }
 }

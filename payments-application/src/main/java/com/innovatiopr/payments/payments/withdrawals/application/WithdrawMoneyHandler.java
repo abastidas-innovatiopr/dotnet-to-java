@@ -3,7 +3,6 @@ package com.innovatiopr.payments.payments.withdrawals.application;
 import com.innovatiopr.payments.accounts.AccountPosting;
 import com.innovatiopr.payments.accounts.AccountsApi;
 import com.innovatiopr.payments.ledger.LedgerApi;
-import com.innovatiopr.payments.ledger.LedgerTransactionId;
 import com.innovatiopr.payments.ledger.PostingReference;
 import com.innovatiopr.payments.payments.application.PaymentTransactionRepository;
 import com.innovatiopr.payments.payments.deposits.application.CashMovementResult;
@@ -13,8 +12,7 @@ import com.innovatiopr.payments.payments.domain.TransactionReference;
 import com.innovatiopr.payments.shared.application.CommandHandler;
 import com.innovatiopr.payments.shared.application.DomainEventPublisher;
 import com.innovatiopr.payments.shared.domain.Money;
-import com.innovatiopr.payments.shared.domain.MoneyError;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.MoneyErrors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,51 +42,35 @@ public class WithdrawMoneyHandler implements CommandHandler<WithdrawMoneyCommand
     }
 
     @Override
-    public Result<CashMovementResult> handle(WithdrawMoneyCommand command) {
+    public CashMovementResult handle(WithdrawMoneyCommand command) {
         Currency currency;
         try {
             currency = Currency.getInstance(command.currencyCode());
         } catch (IllegalArgumentException | NullPointerException e) {
-            return Result.failure(new MoneyError.UnknownCurrency(String.valueOf(command.currencyCode())));
+            throw MoneyErrors.unknownCurrency(String.valueOf(command.currencyCode()));
         }
 
         Money amount = Money.of(command.amount(), currency);
-        Result<TransactionReference> reference = TransactionReference.create(command.reference());
-        if (reference.isFailure()) {
-            return reference.propagate();
-        }
+        TransactionReference reference = TransactionReference.create(command.reference());
 
         Instant now = clock.instant();
         TransactionId transactionId = TransactionId.generate();
-        Result<PaymentTransaction> initiated = PaymentTransaction.initiateWithdrawal(transactionId,
-                command.accountId(), amount, reference.orElseThrow(), now);
-        if (initiated.isFailure()) {
-            return initiated.propagate();
-        }
-        PaymentTransaction transaction = initiated.orElseThrow();
+        PaymentTransaction transaction = PaymentTransaction.initiateWithdrawal(transactionId,
+                command.accountId(), amount, reference, now);
 
         // Enforces sufficient funds and account status; takes a row lock for the duration.
-        Result<AccountPosting> posting = accounts.postWithdrawal(command.accountId(), amount);
-        if (posting.isFailure()) {
-            return posting.propagate();
-        }
+        AccountPosting posting = accounts.postWithdrawal(command.accountId(), amount);
 
-        Result<LedgerTransactionId> ledgerResult = ledger.recordWithdrawal(
+        ledger.recordWithdrawal(
                 PostingReference.of(transactionId.value()), command.accountId(), amount,
-                reference.orElseThrow().value());
-        if (ledgerResult.isFailure()) {
-            return ledgerResult.propagate();
-        }
+                reference.value());
 
-        Result<Void> completed = transaction.complete(now);
-        if (completed.isFailure()) {
-            return completed.propagate();
-        }
+        transaction.complete(now);
         transactions.save(transaction);
         events.publishFrom(transaction);
 
-        return Result.success(new CashMovementResult(transactionId.value(), command.accountId().value(),
+        return new CashMovementResult(transactionId.value(), command.accountId().value(),
                 amount.amount(), currency.getCurrencyCode(), transaction.status().name(),
-                posting.orElseThrow().balanceAfter().amount(), now));
+                posting.balanceAfter().amount(), now);
     }
 }

@@ -5,7 +5,7 @@ import com.innovatiopr.payments.accounts.AccountsApi;
 import com.innovatiopr.payments.customers.CustomerId;
 import com.innovatiopr.payments.customers.CustomersApi;
 import com.innovatiopr.payments.payments.PaymentsApi;
-import com.innovatiopr.payments.shared.domain.Result;
+import com.innovatiopr.payments.shared.domain.ConflictException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -82,58 +82,45 @@ class DevelopmentDataSeeder implements ApplicationRunner {
 
         // Transfers are issued in cancelling pairs, so the closing balances stay exactly 1,000.00 and
         // 5,000.00 while the history is long enough to demonstrate pagination.
-        int completed = 0;
         for (int i = 0; i < TRANSFER_PAIRS; i++) {
             BigDecimal amount = new BigDecimal(10 + (i * 7) % 90).setScale(2, RoundingMode.UNNECESSARY);
             String reference = REFERENCES.get(i % REFERENCES.size());
 
-            if (transfer(checking, savings, amount, reference)) {
-                completed++;
-            }
-            if (transfer(savings, checking, amount, reference + " (returned)")) {
-                completed++;
-            }
+            transfer(checking, savings, amount, reference);
+            transfer(savings, checking, amount, reference + " (returned)");
         }
 
         log.info("Seeded 3 customers, 2 accounts, 2 opening deposits and {} transfers. "
-                + "Explore the API at http://localhost:8080/docs", completed);
+                + "Explore the API at http://localhost:8080/docs", TRANSFER_PAIRS * 2);
     }
 
-    /** @return the new customer's id, or {@code null} when this email is already registered. */
+    /**
+     * @return the new customer's id, or {@code null} when this email is already registered.
+     *
+     * <p>A re-run on an existing database is the expected case, so a duplicate email is the one failure
+     * this seeder absorbs. Everything else propagates: a seed that half-succeeded and logged a warning
+     * would leave a developer debugging a dataset nobody intended.
+     */
     private CustomerId register(String firstName, String lastName, String email) {
-        Result<CustomerId> result = customers.register(firstName, lastName, email);
-        if (result.isFailure()) {
-            if ("CUSTOMER_EMAIL_ALREADY_REGISTERED".equals(result.firstError().code())) {
+        try {
+            return customers.register(firstName, lastName, email);
+        } catch (ConflictException e) {
+            if ("CUSTOMER_EMAIL_ALREADY_REGISTERED".equals(e.code())) {
                 return null;
             }
-            throw new IllegalStateException("Seed failed to register " + email + ": "
-                    + result.firstError().message());
+            throw e;
         }
-        return result.orElseThrow();
     }
 
     private AccountId open(CustomerId customerId) {
-        Result<AccountId> result = accounts.open(customerId, "USD");
-        if (result.isFailure()) {
-            throw new IllegalStateException("Seed failed to open account: " + result.firstError().message());
-        }
-        return result.orElseThrow();
+        return accounts.open(customerId, "USD");
     }
 
     private void deposit(AccountId accountId, BigDecimal amount, String reference) {
-        Result<UUID> result = payments.deposit(accountId, amount, "USD", reference);
-        if (result.isFailure()) {
-            throw new IllegalStateException("Seed failed to deposit: " + result.firstError().message());
-        }
+        payments.deposit(accountId, amount, "USD", reference);
     }
 
-    private boolean transfer(AccountId source, AccountId destination, BigDecimal amount, String reference) {
-        Result<UUID> result = payments.transfer(UUID.randomUUID().toString(), source, destination, amount,
-                "USD", reference);
-        if (result.isFailure()) {
-            log.warn("Seed transfer rejected: {}", result.firstError().message());
-            return false;
-        }
-        return true;
+    private void transfer(AccountId source, AccountId destination, BigDecimal amount, String reference) {
+        payments.transfer(UUID.randomUUID().toString(), source, destination, amount, "USD", reference);
     }
 }

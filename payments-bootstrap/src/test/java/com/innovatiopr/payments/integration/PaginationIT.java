@@ -44,15 +44,15 @@ class PaginationIT extends AbstractIntegrationTest {
     void seedTransactions() {
         client = RestTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
 
-        CustomerId customer = customers.register("Alan", "Turing", "alan@example.com").orElseThrow();
-        source = accounts.open(customer, "USD").orElseThrow();
-        AccountId destination = accounts.open(customer, "USD").orElseThrow();
-        payments.deposit(source, new BigDecimal("10000.00"), "USD", "Opening deposit").orElseThrow();
+        CustomerId customer = customers.register("Alan", "Turing", "alan@example.com");
+        source = accounts.open(customer, "USD");
+        AccountId destination = accounts.open(customer, "USD");
+        payments.deposit(source, new BigDecimal("10000.00"), "USD", "Opening deposit");
 
         // 25 transfers + 1 deposit = 26 transactions, so the default page size of 20 yields two pages.
         for (int i = 1; i <= 25; i++) {
             payments.transfer(UUID.randomUUID().toString(), source, destination,
-                    new BigDecimal(i + ".00"), "USD", "Transfer " + i).orElseThrow();
+                    new BigDecimal(i + ".00"), "USD", "Transfer " + i);
         }
     }
 
